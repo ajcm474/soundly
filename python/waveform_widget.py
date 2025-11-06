@@ -24,9 +24,6 @@ class WaveformWidget(QWidget):
         self.update()
 
     def paintEvent(self, event):
-        if not self.waveform_data:
-            return
-
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
@@ -36,6 +33,13 @@ class WaveformWidget(QWidget):
 
         # Background
         painter.fillRect(self.rect(), QColor(30, 30, 30))
+
+        # Draw center line (fixed - use integers)
+        painter.setPen(QPen(QColor(80, 80, 80), 1))
+        painter.drawLine(0, int(center_y), width, int(center_y))
+
+        if not self.waveform_data:
+            return
 
         # Draw selection
         if self.selection_start is not None and self.selection_end is not None:
@@ -60,15 +64,11 @@ class WaveformWidget(QWidget):
 
             painter.drawLine(QPointF(x, y_min), QPointF(x, y_max))
 
-        # Draw center line
-        painter.setPen(QPen(QColor(80, 80, 80), 1))
-        painter.drawLine(0, center_y, width, center_y)
-
         # Draw playback position
         if self.playback_position > 0:
             x = self.time_to_x(self.playback_position)
             painter.setPen(QPen(QColor(255, 100, 100), 2))
-            painter.drawLine(x, 0, x, height)
+            painter.drawLine(int(x), 0, int(x), height)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -94,12 +94,15 @@ class WaveformWidget(QWidget):
         return (time / self.duration) * self.width()
 
     def x_to_time(self, x):
+        if self.width() == 0:
+            return 0
         return (x / self.width()) * self.duration
 
     def get_selection(self):
         if self.selection_start is not None and self.selection_end is not None:
-            return (min(self.selection_start, self.selection_end),
-                    max(self.selection_start, self.selection_end))
+            if abs(self.selection_end - self.selection_start) > 0.001:  # Minimum selection size
+                return (min(self.selection_start, self.selection_end),
+                        max(self.selection_start, self.selection_end))
         return None
 
     def clear_selection(self):
@@ -119,12 +122,14 @@ class WaveformWidget(QWidget):
         self.zoom_level *= 1.5
         self.update()
         # Request waveform redraw from parent
-        if self.parent():
-            self.parent().update_waveform()
+        parent = self.parent()
+        if parent and hasattr(parent.parent(), 'update_waveform'):
+            parent.parent().update_waveform()
 
     def zoom_out(self):
         self.zoom_level = max(1.0, self.zoom_level / 1.5)
         self.update()
         # Request waveform redraw from parent
-        if self.parent():
-            self.parent().update_waveform()
+        parent = self.parent()
+        if parent and hasattr(parent.parent(), 'update_waveform'):
+            parent.parent().update_waveform()

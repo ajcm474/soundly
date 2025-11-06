@@ -6,6 +6,7 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use std::fs::File;
 use std::path::Path;
+use std::io::Write;
 use crate::playback::AudioPlayback;
 
 pub struct AudioEngine {
@@ -71,6 +72,17 @@ impl AudioEngine {
             }
         }
 
+        // Ensure we have stereo data (convert mono to stereo if needed)
+        if self.channels == 1 {
+            let mut stereo_data = Vec::with_capacity(self.audio_data.len() * 2);
+            for sample in &self.audio_data {
+                stereo_data.push(*sample);
+                stereo_data.push(*sample);
+            }
+            self.audio_data = stereo_data;
+            self.channels = 2;
+        }
+
         Ok(())
     }
 
@@ -117,7 +129,16 @@ impl AudioEngine {
             let mut min = 0.0f32;
             let mut max = 0.0f32;
 
-            for &sample in &self.audio_data[start..end] {
+            for j in (start..end).step_by(self.channels) {
+                // Average the channels for display
+                let mut sample = 0.0;
+                for ch in 0..self.channels.min(2) {
+                    if j + ch < self.audio_data.len() {
+                        sample += self.audio_data[j + ch];
+                    }
+                }
+                sample /= self.channels.min(2) as f32;
+
                 min = min.min(sample);
                 max = max.max(sample);
             }
@@ -148,14 +169,14 @@ impl AudioEngine {
         let start_sample = start_frame * self.channels;
         let end_sample = end_frame * self.channels;
 
-        let audio_slice = &self.audio_data[start_sample..end_sample.min(self.audio_data.len())];
+        let audio_slice = &self.audio_data[start_sample.min(self.audio_data.len())..end_sample.min(self.audio_data.len())];
 
         if self.playback.is_none() {
             self.playback = Some(AudioPlayback::new(self.sample_rate, self.channels)?);
         }
 
         if let Some(ref mut playback) = self.playback {
-            playback.play(audio_slice.to_vec())?;
+            playback.play(audio_slice.to_vec(), start_frame as f64 / self.sample_rate as f64)?;
         }
 
         Ok(())
@@ -244,7 +265,7 @@ impl AudioEngine {
             .map_err(|e| format!("Failed to create WAV file: {}", e))?;
 
         for &sample in data {
-            let sample_i16 = (sample * i16::MAX as f32) as i16;
+            let sample_i16 = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
             writer.write_sample(sample_i16)
                 .map_err(|e| format!("Failed to write sample: {}", e))?;
         }
@@ -256,14 +277,93 @@ impl AudioEngine {
     }
 
     fn export_flac(&self, path: &str, data: &[f32]) -> Result<(), String> {
-        // Simplified FLAC export - convert to WAV for now
-        // For full FLAC support, use a proper FLAC encoder
-        self.export_wav(path, data)
+        use flacenc::{encode_with_fixed_block_size, FlacEncoderConfig};
+        use flacenc::component::BitRepr;
+
+        // Convert f32 to i32 for FLAC encoding
+        let frames = data.len() / self.channels;
+        let mut samples_i32 = Vec::with_capacity(data.len());
+
+        for &sample in data {
+            let sample_i32 = (sample.clamp(-1.0, 1.0) * i32::MAX as f32) as i32;
+            samples_i32.push(sample_i32);
+        }
+
+        // Create the encoder config
+        let config = FlacEncoderConfig {
+            block_size: 4096,
+            bits_per_sample: 24,
+            channels: self.channels as u32,
+            sample_rate: self.sample_rate,
+        };
+
+        // Encode to FLAC
+        let encoded = encode_with_fixed_block_size(
+            &config,
+            &samples_i32,
+            frames,
+        ).map_err(|e| format!("FLAC encoding error: {:?}", e))?;
+
+        // Write to file
+        let mut file = File::create(path)
+            .map_err(|e| format!("Failed to create FLAC file: {}", e))?;
+
+        let bytes = encoded.to_bytes();
+        file.write_all(&bytes)
+            .map_err(|e| format!("Failed to write FLAC file: {}", e))?;
+
+        Ok(())
     }
 
     fn export_mp3(&self, path: &str, data: &[f32]) -> Result<(), String> {
-        // Simplified MP3 export - convert to WAV for now
-        // For full MP3 support, use mp3lame-encoder properly
-        self.export_wav(path, data)
+        use mp3lame_encoder::{Builder, FlushNoGap, InterleavedPcm};
+
+        // Convert to stereo interleaved i16 samples
+        let mut samples_i16 = Vec::with_capacity(data.len());
+        for &sample in data {
+            let sample_i16 = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+            samples_i16.push(sample_i16);
+        }
+
+        // Setup MP3 encoder
+        let mut mp3_encoder = Builder::new()
+            .ok_or("Failed to create MP3 encoder")?;
+
+        mp3_encoder.set_sample_rate(self.sample_rate)
+            .map_err(|e| format!("Failed to set sample rate: {:?}", e))?;
+
+        mp3_encoder.set_num_channels(self.channels as u8)
+            .map_err(|e| format!("Failed to set channels: {:?}", e))?;
+
+        mp3_encoder.set_brate(mp3lame_encoder::Bitrate::Kbps192)
+            .map_err(|e| format!("Failed to set bitrate: {:?}", e))?;
+
+        mp3_encoder.set_quality(mp3lame_encoder::Quality::Good)
+            .map_err(|e| format!("Failed to set quality: {:?}", e))?;
+
+        let mut mp3_encoder = mp3_encoder.build()
+            .map_err(|e| format!("Failed to build encoder: {:?}", e))?;
+
+        // Encode
+        let input = InterleavedPcm(&samples_i16);
+        let mut mp3_out = Vec::new();
+
+        let mut output = [0u8; mp3lame_encoder::max_required_buffer_size(4096)];
+        let encoded_size = mp3_encoder.encode(input, &mut output)
+            .map_err(|e| format!("Failed to encode MP3: {:?}", e))?;
+        mp3_out.extend_from_slice(&output[..encoded_size]);
+
+        // Flush
+        let flushed_size = mp3_encoder.flush_no_gap(&mut output)
+            .map_err(|e| format!("Failed to flush MP3: {:?}", e))?;
+        mp3_out.extend_from_slice(&output[..flushed_size]);
+
+        // Write to file
+        let mut file = File::create(path)
+            .map_err(|e| format!("Failed to create MP3 file: {}", e))?;
+        file.write_all(&mp3_out)
+            .map_err(|e| format!("Failed to write MP3 file: {}", e))?;
+
+        Ok(())
     }
 }

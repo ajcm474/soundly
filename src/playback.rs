@@ -6,12 +6,14 @@ struct PlaybackState {
     buffer: Vec<f32>,
     position: usize,
     is_playing: bool,
+    start_time_offset: f64,  // Add offset for proper position tracking
 }
 
 pub struct AudioPlayback {
     state: Arc<Mutex<PlaybackState>>,
     _stream: Stream,
     sample_rate: u32,
+    channels: usize,
 }
 
 impl AudioPlayback {
@@ -31,9 +33,11 @@ impl AudioPlayback {
             buffer: Vec::new(),
             position: 0,
             is_playing: false,
+            start_time_offset: 0.0,
         }));
 
         let state_clone = state.clone();
+        let channels = channels;
 
         let stream = device
             .build_output_stream(
@@ -64,14 +68,16 @@ impl AudioPlayback {
             state,
             _stream: stream,
             sample_rate,
+            channels,
         })
     }
 
-    pub fn play(&mut self, buffer: Vec<f32>) -> Result<(), String> {
+    pub fn play(&mut self, buffer: Vec<f32>, start_time_offset: f64) -> Result<(), String> {
         let mut state = self.state.lock().unwrap();
         state.buffer = buffer;
         state.position = 0;
         state.is_playing = true;
+        state.start_time_offset = start_time_offset;
         Ok(())
     }
 
@@ -84,6 +90,7 @@ impl AudioPlayback {
         let mut state = self.state.lock().unwrap();
         state.is_playing = false;
         state.position = 0;
+        state.start_time_offset = 0.0;
     }
 
     pub fn is_playing(&self) -> bool {
@@ -92,7 +99,9 @@ impl AudioPlayback {
 
     pub fn get_position(&self) -> f64 {
         let state = self.state.lock().unwrap();
-        state.position as f64 / self.sample_rate as f64
+        let current_sample = state.position / self.channels;
+        let current_time = current_sample as f64 / self.sample_rate as f64;
+        current_time + state.start_time_offset
     }
 
     pub fn set_position(&mut self, _position: f64) {
