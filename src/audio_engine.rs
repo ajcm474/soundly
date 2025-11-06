@@ -420,9 +420,10 @@ impl AudioEngine
         let input = InterleavedPcm(&samples_i16);
         let mut mp3_out = Vec::new();
 
-        // Use MaybeUninit buffer as required by the API - allocate a reasonable size
-        const BUFFER_SIZE: usize = 8192;
-        let mut output: [MaybeUninit<u8>; BUFFER_SIZE] = unsafe { MaybeUninit::uninit().assume_init() };
+        // Calculate proper buffer size: 1.25 * num_samples + 7200
+        // This is the formula recommended by LAME for worst-case output size
+        let buffer_size = (samples_i16.len() * 5 / 4 + 7200).max(16384);
+        let mut output: Vec<MaybeUninit<u8>> = vec![MaybeUninit::uninit(); buffer_size];
         
         let encoded_size = mp3_encoder.encode(input, &mut output[..])
             .map_err(|e| format!("Failed to encode MP3: {:?}", e))?;
