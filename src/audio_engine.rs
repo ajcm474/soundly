@@ -9,15 +9,18 @@ use std::path::Path;
 use std::io::Write;
 use crate::playback::AudioPlayback;
 
-pub struct AudioEngine {
+pub struct AudioEngine
+{
     audio_data: Vec<f32>,
     sample_rate: u32,
     channels: usize,
     playback: Option<AudioPlayback>,
 }
 
-impl AudioEngine {
-    pub fn new() -> Self {
+impl AudioEngine
+{
+    pub fn new() -> Self
+    {
         AudioEngine {
             audio_data: Vec::new(),
             sample_rate: 44100,
@@ -26,12 +29,14 @@ impl AudioEngine {
         }
     }
 
-    pub fn load_file(&mut self, path: &str) -> Result<(), String> {
+    pub fn load_file(&mut self, path: &str) -> Result<(), String>
+    {
         let file = File::open(path).map_err(|e| e.to_string())?;
         let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
         let mut hint = Hint::new();
-        if let Some(ext) = Path::new(path).extension() {
+        if let Some(ext) = Path::new(path).extension()
+        {
             hint.with_extension(ext.to_str().unwrap_or(""));
         }
 
@@ -58,14 +63,18 @@ impl AudioEngine {
         self.channels = track.codec_params.channels.unwrap_or_default().count();
         self.audio_data.clear();
 
-        loop {
-            let packet = match format.next_packet() {
+        loop
+        {
+            let packet = match format.next_packet()
+            {
                 Ok(packet) => packet,
                 Err(_) => break,
             };
 
-            match decoder.decode(&packet) {
-                Ok(audio_buf) => {
+            match decoder.decode(&packet)
+            {
+                Ok(audio_buf) =>
+                {
                     self.append_audio_buffer(audio_buf);
                 }
                 Err(_) => continue,
@@ -73,9 +82,11 @@ impl AudioEngine {
         }
 
         // Ensure we have stereo data (convert mono to stereo if needed)
-        if self.channels == 1 {
+        if self.channels == 1
+        {
             let mut stereo_data = Vec::with_capacity(self.audio_data.len() * 2);
-            for sample in &self.audio_data {
+            for sample in &self.audio_data
+            {
                 stereo_data.push(*sample);
                 stereo_data.push(*sample);
             }
@@ -86,25 +97,36 @@ impl AudioEngine {
         Ok(())
     }
 
-    fn append_audio_buffer(&mut self, audio_buf: AudioBufferRef) {
-        match audio_buf {
-            AudioBufferRef::F32(buf) => {
-                for frame in 0..buf.frames() {
-                    for ch in 0..buf.spec().channels.count() {
+    fn append_audio_buffer(&mut self, audio_buf: AudioBufferRef)
+    {
+        match audio_buf
+        {
+            AudioBufferRef::F32(buf) =>
+            {
+                for frame in 0..buf.frames()
+                {
+                    for ch in 0..buf.spec().channels.count()
+                    {
                         self.audio_data.push(buf.chan(ch)[frame]);
                     }
                 }
             }
-            AudioBufferRef::S32(buf) => {
-                for frame in 0..buf.frames() {
-                    for ch in 0..buf.spec().channels.count() {
+            AudioBufferRef::S32(buf) =>
+            {
+                for frame in 0..buf.frames()
+                {
+                    for ch in 0..buf.spec().channels.count()
+                    {
                         self.audio_data.push(buf.chan(ch)[frame] as f32 / i32::MAX as f32);
                     }
                 }
             }
-            AudioBufferRef::S16(buf) => {
-                for frame in 0..buf.frames() {
-                    for ch in 0..buf.spec().channels.count() {
+            AudioBufferRef::S16(buf) =>
+            {
+                for frame in 0..buf.frames()
+                {
+                    for ch in 0..buf.spec().channels.count()
+                    {
                         self.audio_data.push(buf.chan(ch)[frame] as f32 / i16::MAX as f32);
                     }
                 }
@@ -113,8 +135,10 @@ impl AudioEngine {
         }
     }
 
-    pub fn get_waveform_data(&self, samples_per_pixel: usize) -> Vec<(f32, f32)> {
-        if self.audio_data.is_empty() {
+    pub fn get_waveform_data(&self, samples_per_pixel: usize) -> Vec<(f32, f32)>
+    {
+        if self.audio_data.is_empty()
+        {
             return Vec::new();
         }
 
@@ -122,18 +146,22 @@ impl AudioEngine {
         let pixel_count = (frame_count + samples_per_pixel - 1) / samples_per_pixel;
         let mut waveform = Vec::with_capacity(pixel_count);
 
-        for i in 0..pixel_count {
+        for i in 0..pixel_count
+        {
             let start = i * samples_per_pixel * self.channels;
             let end = ((i + 1) * samples_per_pixel * self.channels).min(self.audio_data.len());
 
             let mut min = 0.0f32;
             let mut max = 0.0f32;
 
-            for j in (start..end).step_by(self.channels) {
+            for j in (start..end).step_by(self.channels)
+            {
                 // Average the channels for display
                 let mut sample = 0.0;
-                for ch in 0..self.channels.min(2) {
-                    if j + ch < self.audio_data.len() {
+                for ch in 0..self.channels.min(2)
+                {
+                    if j + ch < self.audio_data.len()
+                    {
                         sample += self.audio_data[j + ch];
                     }
                 }
@@ -149,18 +177,22 @@ impl AudioEngine {
         waveform
     }
 
-    pub fn get_sample_rate(&self) -> u32 {
+    pub fn get_sample_rate(&self) -> u32
+    {
         self.sample_rate
     }
 
-    pub fn get_duration(&self) -> f64 {
-        if self.audio_data.is_empty() {
+    pub fn get_duration(&self) -> f64
+    {
+        if self.audio_data.is_empty()
+        {
             return 0.0;
         }
         (self.audio_data.len() / self.channels) as f64 / self.sample_rate as f64
     }
 
-    pub fn play(&mut self, start_time: Option<f64>, end_time: Option<f64>) -> Result<(), String> {
+    pub fn play(&mut self, start_time: Option<f64>, end_time: Option<f64>) -> Result<(), String>
+    {
         let start_frame = start_time.map(|t| (t * self.sample_rate as f64) as usize).unwrap_or(0);
         let end_frame = end_time
             .map(|t| (t * self.sample_rate as f64) as usize)
@@ -171,54 +203,66 @@ impl AudioEngine {
 
         let audio_slice = &self.audio_data[start_sample.min(self.audio_data.len())..end_sample.min(self.audio_data.len())];
 
-        if self.playback.is_none() {
+        if self.playback.is_none()
+        {
             self.playback = Some(AudioPlayback::new(self.sample_rate, self.channels)?);
         }
 
-        if let Some(ref mut playback) = self.playback {
+        if let Some(ref mut playback) = self.playback
+        {
             playback.play(audio_slice.to_vec(), start_frame as f64 / self.sample_rate as f64)?;
         }
 
         Ok(())
     }
 
-    pub fn pause(&mut self) {
-        if let Some(ref mut playback) = self.playback {
+    pub fn pause(&mut self)
+    {
+        if let Some(ref mut playback) = self.playback
+        {
             playback.pause();
         }
     }
 
-    pub fn stop(&mut self) {
-        if let Some(ref mut playback) = self.playback {
+    pub fn stop(&mut self)
+    {
+        if let Some(ref mut playback) = self.playback
+        {
             playback.stop();
         }
     }
 
-    pub fn is_playing(&self) -> bool {
+    pub fn is_playing(&self) -> bool
+    {
         self.playback.as_ref().map(|p| p.is_playing()).unwrap_or(false)
     }
 
-    pub fn get_playback_position(&self) -> f64 {
+    pub fn get_playback_position(&self) -> f64
+    {
         self.playback
             .as_ref()
             .map(|p| p.get_position())
             .unwrap_or(0.0)
     }
 
-    pub fn set_playback_position(&mut self, position: f64) {
-        if let Some(ref mut playback) = self.playback {
+    pub fn set_playback_position(&mut self, position: f64)
+    {
+        if let Some(ref mut playback) = self.playback
+        {
             playback.set_position(position);
         }
     }
 
-    pub fn delete_region(&mut self, start_time: f64, end_time: f64) -> Result<(), String> {
+    pub fn delete_region(&mut self, start_time: f64, end_time: f64) -> Result<(), String>
+    {
         let start_frame = (start_time * self.sample_rate as f64) as usize;
         let end_frame = (end_time * self.sample_rate as f64) as usize;
 
         let start_sample = start_frame * self.channels;
         let end_sample = end_frame * self.channels;
 
-        if start_sample >= self.audio_data.len() {
+        if start_sample >= self.audio_data.len()
+        {
             return Err("Start position out of bounds".to_string());
         }
 
@@ -228,7 +272,8 @@ impl AudioEngine {
         Ok(())
     }
 
-    pub fn export_audio(&self, path: &str, start_time: Option<f64>, end_time: Option<f64>) -> Result<(), String> {
+    pub fn export_audio(&self, path: &str, start_time: Option<f64>, end_time: Option<f64>) -> Result<(), String>
+    {
         let start_frame = start_time.map(|t| (t * self.sample_rate as f64) as usize).unwrap_or(0);
         let end_frame = end_time
             .map(|t| (t * self.sample_rate as f64) as usize)
@@ -240,20 +285,28 @@ impl AudioEngine {
         let export_data = &self.audio_data[start_sample..end_sample];
 
         let path_lower = path.to_lowercase();
-        if path_lower.ends_with(".wav") {
+        if path_lower.ends_with(".wav")
+        {
             self.export_wav(path, export_data)?;
-        } else if path_lower.ends_with(".flac") {
+        }
+        else if path_lower.ends_with(".flac")
+        {
             self.export_flac(path, export_data)?;
-        } else if path_lower.ends_with(".mp3") {
+        }
+        else if path_lower.ends_with(".mp3")
+        {
             self.export_mp3(path, export_data)?;
-        } else {
+        }
+        else
+        {
             return Err("Unsupported format. Use .wav, .flac, or .mp3".to_string());
         }
 
         Ok(())
     }
 
-    fn export_wav(&self, path: &str, data: &[f32]) -> Result<(), String> {
+    fn export_wav(&self, path: &str, data: &[f32]) -> Result<(), String>
+    {
         let spec = hound::WavSpec {
             channels: self.channels as u16,
             sample_rate: self.sample_rate,
@@ -264,7 +317,8 @@ impl AudioEngine {
         let mut writer = hound::WavWriter::create(path, spec)
             .map_err(|e| format!("Failed to create WAV file: {}", e))?;
 
-        for &sample in data {
+        for &sample in data
+        {
             let sample_i16 = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
             writer.write_sample(sample_i16)
                 .map_err(|e| format!("Failed to write sample: {}", e))?;
@@ -276,51 +330,69 @@ impl AudioEngine {
         Ok(())
     }
 
-    fn export_flac(&self, path: &str, data: &[f32]) -> Result<(), String> {
-        use flacenc::{encode_with_fixed_block_size, FlacEncoderConfig};
+    fn export_flac(&self, path: &str, data: &[f32]) -> Result<(), String>
+    {
+        use flacenc::{encode_with_fixed_block_size, config};
+        use flacenc::source::MemSource;
+        use flacenc::error::Verify;
         use flacenc::component::BitRepr;
+        use flacenc::bitsink::MemSink;
 
         // Convert f32 to i32 for FLAC encoding
-        let frames = data.len() / self.channels;
         let mut samples_i32 = Vec::with_capacity(data.len());
 
-        for &sample in data {
-            let sample_i32 = (sample.clamp(-1.0, 1.0) * i32::MAX as f32) as i32;
+        for &sample in data
+        {
+            let sample_i32 = (sample.clamp(-1.0, 1.0) * ((1i32 << 23) - 1) as f32) as i32;
             samples_i32.push(sample_i32);
         }
 
         // Create the encoder config
-        let config = FlacEncoderConfig {
-            block_size: 4096,
-            bits_per_sample: 24,
-            channels: self.channels as u32,
-            sample_rate: self.sample_rate,
-        };
+        let config = config::Encoder::default()
+            .into_verified()
+            .map_err(|e| format!("Failed to verify config: {:?}", e))?;
+
+        // Create memory source
+        let source = MemSource::from_samples(
+            &samples_i32,
+            self.channels,
+            24,
+            self.sample_rate as usize,
+        );
 
         // Encode to FLAC
-        let encoded = encode_with_fixed_block_size(
+        let stream = encode_with_fixed_block_size(
             &config,
-            &samples_i32,
-            frames,
+            source,
+            4096,
         ).map_err(|e| format!("FLAC encoding error: {:?}", e))?;
+
+        // Convert stream to bytes using MemSink
+        let bitcount = stream.count_bits();
+        let mut sink = MemSink::with_capacity(bitcount);
+        stream.write(&mut sink)
+            .map_err(|e| format!("Failed to write FLAC stream: {:?}", e))?;
+        let output = sink.into_inner();
 
         // Write to file
         let mut file = File::create(path)
             .map_err(|e| format!("Failed to create FLAC file: {}", e))?;
 
-        let bytes = encoded.to_bytes();
-        file.write_all(&bytes)
+        file.write_all(&output)
             .map_err(|e| format!("Failed to write FLAC file: {}", e))?;
 
         Ok(())
     }
 
-    fn export_mp3(&self, path: &str, data: &[f32]) -> Result<(), String> {
-        use mp3lame_encoder::{Builder, FlushNoGap, InterleavedPcm};
+    fn export_mp3(&self, path: &str, data: &[f32]) -> Result<(), String>
+    {
+        use mp3lame_encoder::{Builder, InterleavedPcm, FlushNoGap};
+        use std::mem::MaybeUninit;
 
         // Convert to stereo interleaved i16 samples
         let mut samples_i16 = Vec::with_capacity(data.len());
-        for &sample in data {
+        for &sample in data
+        {
             let sample_i16 = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
             samples_i16.push(sample_i16);
         }
@@ -348,15 +420,24 @@ impl AudioEngine {
         let input = InterleavedPcm(&samples_i16);
         let mut mp3_out = Vec::new();
 
-        let mut output = [0u8; mp3lame_encoder::max_required_buffer_size(4096)];
-        let encoded_size = mp3_encoder.encode(input, &mut output)
+        // Use MaybeUninit buffer as required by the API - allocate a reasonable size
+        const BUFFER_SIZE: usize = 8192;
+        let mut output: [MaybeUninit<u8>; BUFFER_SIZE] = unsafe { MaybeUninit::uninit().assume_init() };
+        
+        let encoded_size = mp3_encoder.encode(input, &mut output[..])
             .map_err(|e| format!("Failed to encode MP3: {:?}", e))?;
-        mp3_out.extend_from_slice(&output[..encoded_size]);
+        
+        // Safely convert MaybeUninit to initialized bytes
+        for i in 0..encoded_size
+        {
+            unsafe {
+                mp3_out.push(output[i].assume_init());
+            }
+        }
 
-        // Flush
-        let flushed_size = mp3_encoder.flush_no_gap(&mut output)
+        // Flush remaining data - specify FlushNoGap type parameter
+        let _flushed_size = mp3_encoder.flush_to_vec::<FlushNoGap>(&mut mp3_out)
             .map_err(|e| format!("Failed to flush MP3: {:?}", e))?;
-        mp3_out.extend_from_slice(&output[..flushed_size]);
 
         // Write to file
         let mut file = File::create(path)
@@ -367,3 +448,4 @@ impl AudioEngine {
         Ok(())
     }
 }
+

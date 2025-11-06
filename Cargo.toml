@@ -12,7 +12,7 @@ pyo3 = { version = "0.20", features = ["extension-module"] }
 symphonia = { version = "0.5", features = ["all"] }
 cpal = "0.15"
 hound = "3.5"
-mp3lame-encoder = { version = "0.2", features = ["bindgen"] }
+mp3lame-encoder = "0.2"
 flacenc = "0.4"  # FLAC encoder
 rubato = "0.14"  # Resampling
 crossbeam-channel = "0.5"
