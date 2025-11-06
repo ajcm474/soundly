@@ -1,0 +1,22 @@
+[package]
+name = "soundly"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "soundly"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.20", features = ["extension-module"] }
+symphonia = { version = "0.5", features = ["all"] }
+cpal = "0.15"
+hound = "3.5"
+mp3lame-encoder = "0.2"
+claxon = "0.4"  # FLAC encoder
+rubato = "0.14"  # Resampling
+crossbeam-channel = "0.5"
+
+[profile.release]
+opt-level = 3
+lto = true
