@@ -7,7 +7,7 @@ mod playback;
 
 use audio_engine::AudioEngine;
 
-#[pyclass]
+#[pyclass(unsendable)]  // Add this attribute
 struct AudioEditor {
     engine: Arc<Mutex<AudioEngine>>,
 }
@@ -90,7 +90,7 @@ impl AudioEditor {
 }
 
 #[pymodule]
-fn audio_editor(_py: Python, m: &PyModule) -> PyResult<()> {
+fn soundly(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<AudioEditor>()?;
     Ok(())
 }
