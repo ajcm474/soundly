@@ -343,45 +343,19 @@ impl AudioEngine
         Ok(())
     }
 
-    fn export_flac(&self, path: &str, data: &[f32], _compression_level: u8) -> Result<(), String>
+    fn export_flac(&self, path: &str, data: &[f32], compression_level: u8) -> Result<(), String>
     {
-        use claxon::FlacWriter;
-        use std::io::BufWriter;
+        use std::path::Path;
 
-        // Convert f32 → 24-bit signed stored in i32
-        let mut samples_i32 = Vec::with_capacity(data.len());
-        for &sample in data {
-            let v = (sample.clamp(-1.0, 1.0) * ((1 << 23) - 1) as f32) as i32;
-            samples_i32.push(v);
-        }
-
-        let file = File::create(path)
-            .map_err(|e| format!("Failed to create FLAC file: {}", e))?;
-        let writer = BufWriter::new(file);
-
-        let mut flac = FlacWriter::new(
-            writer,
-            claxon::metadata::StreamInfo {
-                min_block_size: 4096,
-                max_block_size: 4096,
-                min_frame_size: 0,
-                max_frame_size: 0,
-                sample_rate: self.sample_rate,
-                channels: self.channels as u8,
-                bits_per_sample: 24,
-                total_samples: samples_i32.len() as u64 / self.channels as u64,
-                md5: [0; 16],
-            },
-        ).map_err(|e| format!("Failed to init FLAC writer: {:?}", e))?;
-
-        // Write interleaved 24-bit samples
-        for s in samples_i32 {
-            flac.write_sample(s)
-                .map_err(|e| format!("Failed writing FLAC sample: {:?}", e))?;
-        }
-
-        flac.finish()
-            .map_err(|e| format!("Failed to finalize FLAC: {:?}", e))?;
+        // Use the custom FLAC encoder
+        crate::flac::export_to_flac_with_level(
+            Path::new(path),
+            data,
+            self.sample_rate,
+            self.channels as u16,
+            compression_level,
+        )
+        .map_err(|e| format!("Failed to export FLAC: {}", e))?;
 
         Ok(())
     }

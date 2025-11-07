@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 
 mod audio_engine;
 mod playback;
+mod flac;
 
 use audio_engine::AudioEngine;
 
