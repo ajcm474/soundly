@@ -183,9 +183,19 @@ class AudioEditorWindow(QMainWindow):
             selection = self.waveform.get_selection()
             if selection:
                 start, end = selection
+                # Always play from start of selection when selection exists
+                self.engine.stop()  # Clear any existing playback state
                 self.engine.play(start, end)
             else:
-                self.engine.play(None, None)
+                # Resume from current position or start from beginning
+                current_pos = self.engine.get_playback_position()
+                if current_pos > 0 and current_pos < self.engine.get_duration():
+                    # Resume from current position
+                    self.engine.play(None, None)
+                else:
+                    # Start from beginning
+                    self.engine.stop()
+                    self.engine.play(None, None)
         except Exception as e:
             QMessageBox.critical(self, 'Error', f'Playback error: {str(e)}')
 
@@ -216,7 +226,26 @@ class AudioEditorWindow(QMainWindow):
             if self.engine.is_playing():
                 self.pause()
             else:
-                self.play()
+                # When resuming, check if we need to restart
+                position = self.engine.get_playback_position()
+                selection = self.waveform.get_selection()
+
+                if selection:
+                    start, end = selection
+                    # If we're at the end of selection, restart from beginning
+                    if position >= end:
+                        self.engine.stop()
+                        self.engine.play(start, end)
+                    else:
+                        self.play()
+                else:
+                    # If we're at the end of file, restart from beginning
+                    duration = self.engine.get_duration()
+                    if position >= duration:
+                        self.engine.stop()
+                        self.engine.play(None, None)
+                    else:
+                        self.play()
         except Exception as e:
             print(f"Error toggling playback: {e}")
 
@@ -225,10 +254,29 @@ class AudioEditorWindow(QMainWindow):
             if self.engine.is_playing():
                 position = self.engine.get_playback_position()
                 self.waveform.set_playback_position(position)
-            else:
-                # Check if we should repeat
-                if self.is_repeating and self.waveform.playback_position > 0:
-                    self.play()
+
+                # Check if we've reached the end of selection/file
+                selection = self.waveform.get_selection()
+                if selection:
+                    start, end = selection
+                    if position >= end:
+                        if self.is_repeating:
+                            # Stop and restart from selection beginning
+                            self.engine.stop()
+                            self.engine.play(start, end)
+                        else:
+                            self.engine.stop()
+                            self.waveform.set_playback_position(end)
+                else:
+                    duration = self.engine.get_duration()
+                    if position >= duration:
+                        if self.is_repeating:
+                            # Stop and restart from beginning
+                            self.engine.stop()
+                            self.engine.play(None, None)
+                        else:
+                            self.engine.stop()
+                            self.waveform.set_playback_position(duration)
         except Exception as e:
             print(f"Error checking playback: {e}")
 
@@ -280,10 +328,12 @@ class AudioEditorWindow(QMainWindow):
                     start, end = selection
                     self.engine.export_audio(file_path, start, end,
                                              compression_level, bitrate)
+                    self.statusBar().showMessage(f'Exported selection: {file_path}')
                 else:
-                    self.engine.export_audio(file_path, None, None,
+                    # Export entire file when no selection
+                    self.engine.export_audio(file_path, 0.0, self.engine.get_duration(),
                                              compression_level, bitrate)
-                self.statusBar().showMessage(f'Exported: {file_path}')
+                    self.statusBar().showMessage(f'Exported entire file: {file_path}')
             except Exception as e:
                 QMessageBox.critical(self, 'Error', f'Export error: {str(e)}')
 

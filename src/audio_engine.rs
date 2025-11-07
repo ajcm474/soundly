@@ -194,16 +194,20 @@ impl AudioEngine
 
     pub fn play(&mut self, start_time: Option<f64>, end_time: Option<f64>) -> Result<(), String>
     {
-        // Check if we have a paused playback to resume
-        if let Some(ref mut playback) = self.playback
+        // If both start and end are None and we have paused playback, resume
+        if start_time.is_none() && end_time.is_none()
         {
-            if playback.is_paused()
+            if let Some(ref mut playback) = self.playback
             {
-                playback.resume()?;
-                return Ok(());
+                if playback.is_paused()
+                {
+                    playback.resume()?;
+                    return Ok(());
+                }
             }
         }
 
+        // Otherwise start new playback
         let start_frame = start_time.map(|t| (t * self.sample_rate as f64) as usize).unwrap_or(0);
         let end_frame = end_time
             .map(|t| (t * self.sample_rate as f64) as usize)
