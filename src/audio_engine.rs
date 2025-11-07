@@ -203,7 +203,6 @@ impl AudioEngine
             }
         }
 
-        // Otherwise, start new playback
         let start_frame = start_time.map(|t| (t * self.sample_rate as f64) as usize).unwrap_or(0);
         let end_frame = end_time
             .map(|t| (t * self.sample_rate as f64) as usize)
@@ -319,8 +318,7 @@ impl AudioEngine
 
     fn export_wav(&self, path: &str, data: &[f32]) -> Result<(), String>
     {
-        let spec = hound::WavSpec
-        {
+        let spec = hound::WavSpec {
             channels: self.channels as u16,
             sample_rate: self.sample_rate,
             bits_per_sample: 16,
@@ -347,6 +345,7 @@ impl AudioEngine
     {
         use flacenc::{encode_with_fixed_block_size, config};
         use flacenc::source::MemSource;
+        use flacenc::error::Verify;
         use flacenc::component::BitRepr;
         use flacenc::bitsink::MemSink;
 
@@ -359,23 +358,21 @@ impl AudioEngine
             samples_i32.push(sample_i32);
         }
 
-        // Create the encoder config with compression level
-        let mut config = config::Encoder::default();
-
-        // Set compression level (0-8, where 0 is fastest, 8 is best compression)
-        let level = compression_level.min(8);
-        match level
+        // Create the encoder config
+        // The flacenc crate uses preset configurations based on compression levels
+        let config = match compression_level
         {
-            0 =>
-            {
-                config.set_compression_level(0);
-            }
-            1..=8 =>
-            {
-                config.set_compression_level(level as usize);
-            }
-            _ => {}
-        }
+            0 => config::Encoder::preset_0(),  // Fastest
+            1 => config::Encoder::preset_1(),
+            2 => config::Encoder::preset_2(),
+            3 => config::Encoder::preset_3(),
+            4 => config::Encoder::preset_4(),
+            5 => config::Encoder::preset_5(),  // Default
+            6 => config::Encoder::preset_6(),
+            7 => config::Encoder::preset_7(),
+            8 => config::Encoder::preset_8(),  // Best compression
+            _ => config::Encoder::preset_5(),  // Default for invalid values
+        };
 
         let config = config.into_verified()
             .map_err(|e| format!("Failed to verify config: {:?}", e))?;
@@ -459,7 +456,8 @@ impl AudioEngine
         let input = InterleavedPcm(&samples_i16);
         let mut mp3_out = Vec::new();
 
-        // Calculate proper buffer size
+        // Calculate proper buffer size: 1.25 * num_samples + 7200
+        // This is the formula recommended by LAME for worst-case output size
         let buffer_size = (samples_i16.len() * 5 / 4 + 7200).max(16384);
         let mut output: Vec<MaybeUninit<u8>> = vec![MaybeUninit::uninit(); buffer_size];
 
@@ -469,13 +467,12 @@ impl AudioEngine
         // Safely convert MaybeUninit to initialized bytes
         for i in 0..encoded_size
         {
-            unsafe
-            {
+            unsafe {
                 mp3_out.push(output[i].assume_init());
             }
         }
 
-        // Flush remaining data
+        // Flush remaining data - specify FlushNoGap type parameter
         let _flushed_size = mp3_encoder.flush_to_vec::<FlushNoGap>(&mut mp3_out)
             .map_err(|e| format!("Failed to flush MP3: {:?}", e))?;
 
@@ -488,4 +485,3 @@ impl AudioEngine
         Ok(())
     }
 }
-

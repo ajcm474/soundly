@@ -7,7 +7,7 @@ mod playback;
 
 use audio_engine::AudioEngine;
 
-#[pyclass(unsendable)]  // Add this attribute
+#[pyclass(unsendable)]
 struct AudioEditor {
     engine: Arc<Mutex<AudioEngine>>,
 }
@@ -80,6 +80,7 @@ impl AudioEditor {
             .map_err(|e| PyRuntimeError::new_err(format!("Delete error: {}", e)))
     }
 
+    #[pyo3(signature = (path, start_time=None, end_time=None, compression_level=None, bitrate_kbps=None))]
     fn export_audio(&self, path: String, start_time: Option<f64>, end_time: Option<f64>,
                     compression_level: Option<u8>, bitrate_kbps: Option<u32>) -> PyResult<()> {
         self.engine
