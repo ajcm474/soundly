@@ -13,8 +13,8 @@ symphonia = { version = "0.5", features = ["all"] }
 cpal = "0.15"
 hound = "3.5"
 mp3lame-encoder = "0.2"
-flacenc = "0.4"  # FLAC encoder
-rubato = "0.14"  # Resampling
+flac-codec = "1.2"
+rubato = "0.14"
 crossbeam-channel = "0.5"
 
 [profile.release]

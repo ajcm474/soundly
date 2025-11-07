@@ -21,7 +21,8 @@ impl AudioEngine
 {
     pub fn new() -> Self
     {
-        AudioEngine {
+        AudioEngine
+        {
             audio_data: Vec::new(),
             sample_rate: 44100,
             channels: 2,
@@ -318,7 +319,8 @@ impl AudioEngine
 
     fn export_wav(&self, path: &str, data: &[f32]) -> Result<(), String>
     {
-        let spec = hound::WavSpec {
+        let spec = hound::WavSpec
+        {
             channels: self.channels as u16,
             sample_rate: self.sample_rate,
             bits_per_sample: 16,
@@ -343,68 +345,36 @@ impl AudioEngine
 
     fn export_flac(&self, path: &str, data: &[f32], compression_level: u8) -> Result<(), String>
     {
-        use flacenc::{encode_with_fixed_block_size, config};
-        use flacenc::source::MemSource;
-        use flacenc::error::Verify;
-        use flacenc::component::BitRepr;
-        use flacenc::bitsink::MemSink;
+        use flac_codec::encoder::{Encoder, EncoderBuilder};
+        use std::io::BufWriter;
 
-        // Convert f32 to i32 for FLAC encoding
+        // Convert f32 to i32 for FLAC encoding (24-bit)
         let mut samples_i32 = Vec::with_capacity(data.len());
-
         for &sample in data
         {
             let sample_i32 = (sample.clamp(-1.0, 1.0) * ((1i32 << 23) - 1) as f32) as i32;
             samples_i32.push(sample_i32);
         }
 
-        // Create the encoder config
-        // The flacenc crate uses preset configurations based on compression levels
-        let config = match compression_level
-        {
-            0 => config::Encoder::preset_0(),  // Fastest
-            1 => config::Encoder::preset_1(),
-            2 => config::Encoder::preset_2(),
-            3 => config::Encoder::preset_3(),
-            4 => config::Encoder::preset_4(),
-            5 => config::Encoder::preset_5(),  // Default
-            6 => config::Encoder::preset_6(),
-            7 => config::Encoder::preset_7(),
-            8 => config::Encoder::preset_8(),  // Best compression
-            _ => config::Encoder::preset_5(),  // Default for invalid values
-        };
-
-        let config = config.into_verified()
-            .map_err(|e| format!("Failed to verify config: {:?}", e))?;
-
-        // Create memory source
-        let source = MemSource::from_samples(
-            &samples_i32,
-            self.channels,
-            24,
-            self.sample_rate as usize,
-        );
-
-        // Encode to FLAC
-        let stream = encode_with_fixed_block_size(
-            &config,
-            source,
-            4096,
-        ).map_err(|e| format!("FLAC encoding error: {:?}", e))?;
-
-        // Convert stream to bytes using MemSink
-        let bitcount = stream.count_bits();
-        let mut sink = MemSink::with_capacity(bitcount);
-        stream.write(&mut sink)
-            .map_err(|e| format!("Failed to write FLAC stream: {:?}", e))?;
-        let output = sink.into_inner();
-
-        // Write to file
-        let mut file = File::create(path)
+        // Create encoder
+        let file = File::create(path)
             .map_err(|e| format!("Failed to create FLAC file: {}", e))?;
+        let writer = BufWriter::new(file);
 
-        file.write_all(&output)
-            .map_err(|e| format!("Failed to write FLAC file: {}", e))?;
+        let mut encoder = EncoderBuilder::new()
+            .sample_rate(self.sample_rate)
+            .channels(self.channels as u32)
+            .bits_per_sample(24)
+            .compression_level(compression_level.min(8))
+            .build(writer)
+            .map_err(|e| format!("Failed to create FLAC encoder: {}", e))?;
+
+        // Write samples
+        encoder.write(&samples_i32)
+            .map_err(|e| format!("Failed to write FLAC data: {}", e))?;
+
+        encoder.finish()
+            .map_err(|e| format!("Failed to finalize FLAC: {}", e))?;
 
         Ok(())
     }
@@ -457,7 +427,6 @@ impl AudioEngine
         let mut mp3_out = Vec::new();
 
         // Calculate proper buffer size: 1.25 * num_samples + 7200
-        // This is the formula recommended by LAME for worst-case output size
         let buffer_size = (samples_i16.len() * 5 / 4 + 7200).max(16384);
         let mut output: Vec<MaybeUninit<u8>> = vec![MaybeUninit::uninit(); buffer_size];
 
@@ -467,12 +436,13 @@ impl AudioEngine
         // Safely convert MaybeUninit to initialized bytes
         for i in 0..encoded_size
         {
-            unsafe {
+            unsafe
+            {
                 mp3_out.push(output[i].assume_init());
             }
         }
 
-        // Flush remaining data - specify FlushNoGap type parameter
+        // Flush remaining data
         let _flushed_size = mp3_encoder.flush_to_vec::<FlushNoGap>(&mut mp3_out)
             .map_err(|e| format!("Failed to flush MP3: {:?}", e))?;
 
