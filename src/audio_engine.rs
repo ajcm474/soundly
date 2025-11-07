@@ -193,6 +193,17 @@ impl AudioEngine
 
     pub fn play(&mut self, start_time: Option<f64>, end_time: Option<f64>) -> Result<(), String>
     {
+        // Check if we have a paused playback to resume
+        if let Some(ref mut playback) = self.playback
+        {
+            if playback.is_paused()
+            {
+                playback.resume()?;
+                return Ok(());
+            }
+        }
+
+        // Otherwise, start new playback
         let start_frame = start_time.map(|t| (t * self.sample_rate as f64) as usize).unwrap_or(0);
         let end_frame = end_time
             .map(|t| (t * self.sample_rate as f64) as usize)
@@ -272,7 +283,8 @@ impl AudioEngine
         Ok(())
     }
 
-    pub fn export_audio(&self, path: &str, start_time: Option<f64>, end_time: Option<f64>) -> Result<(), String>
+    pub fn export_audio(&self, path: &str, start_time: Option<f64>, end_time: Option<f64>,
+                       compression_level: Option<u8>, bitrate_kbps: Option<u32>) -> Result<(), String>
     {
         let start_frame = start_time.map(|t| (t * self.sample_rate as f64) as usize).unwrap_or(0);
         let end_frame = end_time
@@ -291,11 +303,11 @@ impl AudioEngine
         }
         else if path_lower.ends_with(".flac")
         {
-            self.export_flac(path, export_data)?;
+            self.export_flac(path, export_data, compression_level.unwrap_or(5))?;
         }
         else if path_lower.ends_with(".mp3")
         {
-            self.export_mp3(path, export_data)?;
+            self.export_mp3(path, export_data, bitrate_kbps.unwrap_or(192))?;
         }
         else
         {
@@ -307,7 +319,8 @@ impl AudioEngine
 
     fn export_wav(&self, path: &str, data: &[f32]) -> Result<(), String>
     {
-        let spec = hound::WavSpec {
+        let spec = hound::WavSpec
+        {
             channels: self.channels as u16,
             sample_rate: self.sample_rate,
             bits_per_sample: 16,
@@ -330,11 +343,10 @@ impl AudioEngine
         Ok(())
     }
 
-    fn export_flac(&self, path: &str, data: &[f32]) -> Result<(), String>
+    fn export_flac(&self, path: &str, data: &[f32], compression_level: u8) -> Result<(), String>
     {
         use flacenc::{encode_with_fixed_block_size, config};
         use flacenc::source::MemSource;
-        use flacenc::error::Verify;
         use flacenc::component::BitRepr;
         use flacenc::bitsink::MemSink;
 
@@ -347,9 +359,25 @@ impl AudioEngine
             samples_i32.push(sample_i32);
         }
 
-        // Create the encoder config
-        let config = config::Encoder::default()
-            .into_verified()
+        // Create the encoder config with compression level
+        let mut config = config::Encoder::default();
+
+        // Set compression level (0-8, where 0 is fastest, 8 is best compression)
+        let level = compression_level.min(8);
+        match level
+        {
+            0 =>
+            {
+                config.set_compression_level(0);
+            }
+            1..=8 =>
+            {
+                config.set_compression_level(level as usize);
+            }
+            _ => {}
+        }
+
+        let config = config.into_verified()
             .map_err(|e| format!("Failed to verify config: {:?}", e))?;
 
         // Create memory source
@@ -384,9 +412,9 @@ impl AudioEngine
         Ok(())
     }
 
-    fn export_mp3(&self, path: &str, data: &[f32]) -> Result<(), String>
+    fn export_mp3(&self, path: &str, data: &[f32], bitrate_kbps: u32) -> Result<(), String>
     {
-        use mp3lame_encoder::{Builder, InterleavedPcm, FlushNoGap};
+        use mp3lame_encoder::{Builder, InterleavedPcm, FlushNoGap, Bitrate};
         use std::mem::MaybeUninit;
 
         // Convert to stereo interleaved i16 samples
@@ -407,7 +435,18 @@ impl AudioEngine
         mp3_encoder.set_num_channels(self.channels as u8)
             .map_err(|e| format!("Failed to set channels: {:?}", e))?;
 
-        mp3_encoder.set_brate(mp3lame_encoder::Bitrate::Kbps192)
+        // Set bitrate based on parameter
+        let bitrate = match bitrate_kbps
+        {
+            128 => Bitrate::Kbps128,
+            160 => Bitrate::Kbps160,
+            192 => Bitrate::Kbps192,
+            256 => Bitrate::Kbps256,
+            320 => Bitrate::Kbps320,
+            _ => Bitrate::Kbps192,  // Default to 192
+        };
+
+        mp3_encoder.set_brate(bitrate)
             .map_err(|e| format!("Failed to set bitrate: {:?}", e))?;
 
         mp3_encoder.set_quality(mp3lame_encoder::Quality::Good)
@@ -420,23 +459,23 @@ impl AudioEngine
         let input = InterleavedPcm(&samples_i16);
         let mut mp3_out = Vec::new();
 
-        // Calculate proper buffer size: 1.25 * num_samples + 7200
-        // This is the formula recommended by LAME for worst-case output size
+        // Calculate proper buffer size
         let buffer_size = (samples_i16.len() * 5 / 4 + 7200).max(16384);
         let mut output: Vec<MaybeUninit<u8>> = vec![MaybeUninit::uninit(); buffer_size];
-        
+
         let encoded_size = mp3_encoder.encode(input, &mut output[..])
             .map_err(|e| format!("Failed to encode MP3: {:?}", e))?;
-        
+
         // Safely convert MaybeUninit to initialized bytes
         for i in 0..encoded_size
         {
-            unsafe {
+            unsafe
+            {
                 mp3_out.push(output[i].assume_init());
             }
         }
 
-        // Flush remaining data - specify FlushNoGap type parameter
+        // Flush remaining data
         let _flushed_size = mp3_encoder.flush_to_vec::<FlushNoGap>(&mut mp3_out)
             .map_err(|e| format!("Failed to flush MP3: {:?}", e))?;
 

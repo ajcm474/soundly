@@ -1,10 +1,67 @@
 import sys
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                             QHBoxLayout, QPushButton, QFileDialog, QMessageBox)
+                             QHBoxLayout, QPushButton, QFileDialog, QMessageBox,
+                             QDialog, QComboBox, QLabel, QDialogButtonBox)
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QKeySequence, QShortcut
 from waveform_widget import WaveformWidget
 import soundly
+
+
+class ExportDialog(QDialog):
+    def __init__(self, parent=None, file_type="wav"):
+        super().__init__(parent)
+        self.file_type = file_type
+        self.setWindowTitle("Export Options")
+        self.setModal(True)
+
+        layout = QVBoxLayout()
+
+        if file_type == "flac":
+            layout.addWidget(QLabel("Compression Level:"))
+            self.compression_combo = QComboBox()
+            self.compression_combo.addItems([
+                "0 - Fastest",
+                "1", "2", "3", "4",
+                "5 - Default",
+                "6", "7", "8 - Best"
+            ])
+            self.compression_combo.setCurrentIndex(5)  # Default to 5
+            layout.addWidget(self.compression_combo)
+
+        elif file_type == "mp3":
+            layout.addWidget(QLabel("Bitrate:"))
+            self.bitrate_combo = QComboBox()
+            self.bitrate_combo.addItems([
+                "128 kbps",
+                "160 kbps",
+                "192 kbps",
+                "256 kbps",
+                "320 kbps"
+            ])
+            self.bitrate_combo.setCurrentIndex(2)  # Default to 192
+            layout.addWidget(self.bitrate_combo)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok |
+            QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self.setLayout(layout)
+
+    def get_compression_level(self):
+        if self.file_type == "flac":
+            return self.compression_combo.currentIndex()
+        return None
+
+    def get_bitrate(self):
+        if self.file_type == "mp3":
+            text = self.bitrate_combo.currentText()
+            return int(text.split()[0])
+        return None
 
 
 class AudioEditorWindow(QMainWindow):
@@ -141,9 +198,11 @@ class AudioEditorWindow(QMainWindow):
 
     def skip_to_end(self):
         try:
-            duration = self.engine.get_duration()
-            self.engine.set_playback_position(duration)
+            # Stop playback first
             self.engine.stop()
+            # Set cursor to end
+            duration = self.engine.get_duration()
+            self.waveform.set_playback_position(duration)
         except Exception as e:
             print(f"Error skipping: {e}")
 
@@ -186,7 +245,7 @@ class AudioEditorWindow(QMainWindow):
                 QMessageBox.critical(self, 'Error', f'Delete error: {str(e)}')
 
     def export_file(self):
-        file_path, _ = QFileDialog.getSaveFileName(
+        file_path, selected_filter = QFileDialog.getSaveFileName(
             self,
             "Export Audio File",
             "",
@@ -195,12 +254,35 @@ class AudioEditorWindow(QMainWindow):
 
         if file_path:
             try:
+                # Determine file type
+                file_type = "wav"
+                if file_path.lower().endswith('.flac'):
+                    file_type = "flac"
+                elif file_path.lower().endswith('.mp3'):
+                    file_type = "mp3"
+
+                compression_level = None
+                bitrate = None
+
+                # Show options dialog for FLAC and MP3
+                if file_type in ["flac", "mp3"]:
+                    dialog = ExportDialog(self, file_type)
+                    if dialog.exec() == QDialog.DialogCode.Accepted:
+                        if file_type == "flac":
+                            compression_level = dialog.get_compression_level()
+                        elif file_type == "mp3":
+                            bitrate = dialog.get_bitrate()
+                    else:
+                        return  # User cancelled
+
                 selection = self.waveform.get_selection()
                 if selection:
                     start, end = selection
-                    self.engine.export_audio(file_path, start, end)
+                    self.engine.export_audio(file_path, start, end,
+                                             compression_level, bitrate)
                 else:
-                    self.engine.export_audio(file_path, None, None)
+                    self.engine.export_audio(file_path, None, None,
+                                             compression_level, bitrate)
                 self.statusBar().showMessage(f'Exported: {file_path}')
             except Exception as e:
                 QMessageBox.critical(self, 'Error', f'Export error: {str(e)}')

@@ -80,11 +80,12 @@ impl AudioEditor {
             .map_err(|e| PyRuntimeError::new_err(format!("Delete error: {}", e)))
     }
 
-    fn export_audio(&self, path: String, start_time: Option<f64>, end_time: Option<f64>) -> PyResult<()> {
+    fn export_audio(&self, path: String, start_time: Option<f64>, end_time: Option<f64>,
+                    compression_level: Option<u8>, bitrate_kbps: Option<u32>) -> PyResult<()> {
         self.engine
             .lock()
             .unwrap()
-            .export_audio(&path, start_time, end_time)
+            .export_audio(&path, start_time, end_time, compression_level, bitrate_kbps)
             .map_err(|e| PyRuntimeError::new_err(format!("Export error: {}", e)))
     }
 }
