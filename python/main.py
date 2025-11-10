@@ -197,6 +197,13 @@ class AudioEditorWindow(QMainWindow):
         if file_path:
             try:
                 self.engine.load_file(file_path)
+
+                # Reset zoom and view
+                self.waveform.zoom_level = 1.0
+                self.waveform.view_start_time = 0.0
+                self.waveform.view_end_time = self.engine.get_duration()
+
+                # Update waveform display
                 self.update_waveform()
                 self.statusBar().showMessage(f'Loaded: {file_path}')
             except Exception as e:
@@ -211,15 +218,24 @@ class AudioEditorWindow(QMainWindow):
             if duration == 0:
                 return
 
+            # Get channel count
+            try:
+                channels = self.engine.get_channels()
+            except:
+                channels = 2  # Default to stereo if method doesn't exist
+
             # Use the new Rust method for visible range
             width = self.waveform.width()
+            if width <= 0:
+                return
+
             waveform_data = self.engine.get_waveform_for_range(
                 self.waveform.view_start_time,
                 self.waveform.view_end_time,
                 width
             )
 
-            self.waveform.set_waveform(waveform_data, duration)
+            self.waveform.set_waveform(waveform_data, duration, channels)
         except Exception as e:
             print(f"Error updating waveform: {e}")
 

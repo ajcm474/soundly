@@ -16,6 +16,7 @@ class WaveformWidget(QWidget):
         self.view_start_time = 0.0  # Start time of the visible portion
         self.view_end_time = 0.0    # End time of the visible portion
         self.is_stereo = False
+        self.channels = 2
         self.auto_scroll = True      # Auto-scroll during playback
 
         self.setMinimumHeight(200)
@@ -46,15 +47,15 @@ class WaveformWidget(QWidget):
 
         return ''.join(parts) if parts else "0s"
 
-    def set_waveform(self, data, duration):
+    def set_waveform(self, data, duration, channels=None):
         self.waveform_data = data
         self.duration = duration
-        # Check if we have mono data (NaN in the right channel values)
-        self.is_stereo = len(data) > 0 and not (len(data[0]) == 4 and
-                                                (data[0][2] != data[0][2] or  # Check for NaN
-                                                 data[0][2] == data[0][0]))   # Or same values
+        self.channels = channels if channels else 2
 
-        # Initialize view to show full waveform
+        # Determine if stereo based on actual channel count
+        self.is_stereo = self.channels == 2
+
+        # Initialize view to show full waveform if at default zoom
         if self.zoom_level == 1.0:
             self.view_start_time = 0.0
             self.view_end_time = duration
@@ -97,14 +98,14 @@ class WaveformWidget(QWidget):
         # Draw time ruler
         self.draw_time_ruler(painter, width, ruler_height)
 
-        # Translate painter for waveform drawing
+        # Save state before translating
         painter.save()
         painter.translate(0, ruler_height)
 
         # Calculate visible range
         visible_duration = self.view_end_time - self.view_start_time
         if visible_duration <= 0:
-            painter.restore()
+            painter.restore()  # Restore before returning
             return
 
         # Draw selection (if visible)
@@ -121,8 +122,6 @@ class WaveformWidget(QWidget):
 
         # Calculate which samples to draw
         total_samples = len(self.waveform_data)
-        if self.is_stereo:
-            total_samples = len(self.waveform_data)  # Already have the right count
 
         start_fraction = self.view_start_time / self.duration if self.duration > 0 else 0
         end_fraction = self.view_end_time / self.duration if self.duration > 0 else 1
@@ -131,19 +130,12 @@ class WaveformWidget(QWidget):
         end_sample = min(int(end_fraction * total_samples) + 1, total_samples)
 
         if start_sample >= end_sample:
+            painter.restore()  # Restore before returning
             return
 
         samples_to_draw = end_sample - start_sample
 
-        # Draw waveforms - check for actual mono data
-        is_mono = False
-        if len(self.waveform_data) > 0:
-            # Check if this is mono data (NaN markers or identical channels)
-            sample = self.waveform_data[0]
-            if len(sample) == 4:
-                is_mono = (sample[2] != sample[2]) or (sample[0] == sample[2] and sample[1] == sample[3])
-
-        if not is_mono and self.is_stereo:
+        if self.is_stereo and self.channels == 2:
             # Draw stereo waveform
             channel_height = waveform_height / 2
 
@@ -208,13 +200,16 @@ class WaveformWidget(QWidget):
 
                 painter.drawLine(QPointF(x, y_min), QPointF(x, y_max))
 
-        # Draw playback position (if visible)
+        # Restore painter state
+        painter.restore()
+
+        # Draw playback position (if visible) - after restoring so it's not translated
         if (self.playback_position > 0 and
                 self.playback_position >= self.view_start_time and
                 self.playback_position <= self.view_end_time):
             x = self.time_to_x(self.playback_position)
             painter.setPen(QPen(QColor(255, 100, 100), 2))
-            painter.drawLine(int(x), 0, int(x), waveform_height)
+            painter.drawLine(int(x), 0, int(x), height)
 
     def draw_time_ruler(self, painter, width, ruler_height):
         """Draw time ruler at the top of the widget"""

@@ -360,24 +360,24 @@ impl AudioEngine
 
         let mut waveform = Vec::with_capacity(num_pixels);
 
-        if self.channels == 2
+        for i in 0..num_pixels
         {
-            // Stereo
-            for i in 0..num_pixels
+            let pixel_start_frame = start_frame + (i as f64 * samples_per_pixel) as usize;
+            let pixel_end_frame = (start_frame + ((i + 1) as f64 * samples_per_pixel) as usize).min(end_frame);
+
+            if pixel_start_frame >= pixel_end_frame
             {
-                let pixel_start_frame = start_frame + (i as f64 * samples_per_pixel) as usize;
-                let pixel_end_frame = (start_frame + ((i + 1) as f64 * samples_per_pixel) as usize).min(end_frame);
+                waveform.push((0.0, 0.0, 0.0, 0.0));
+                continue;
+            }
 
-                if pixel_start_frame >= pixel_end_frame
-                {
-                    waveform.push((0.0, 0.0, 0.0, 0.0));
-                    continue;
-                }
-
-                let mut min_l = f32::MAX;
-                let mut max_l = f32::MIN;
-                let mut min_r = f32::MAX;
-                let mut max_r = f32::MIN;
+            if self.channels == 2
+            {
+                // Stereo - separate left and right channels
+                let mut min_l = 0.0f32;
+                let mut max_l = 0.0f32;
+                let mut min_r = 0.0f32;
+                let mut max_r = 0.0f32;
 
                 for frame in pixel_start_frame..pixel_end_frame
                 {
@@ -394,52 +394,32 @@ impl AudioEngine
                     }
                 }
 
-                if min_l == f32::MAX { min_l = 0.0; }
-                if max_l == f32::MIN { max_l = 0.0; }
-                if min_r == f32::MAX { min_r = 0.0; }
-                if max_r == f32::MIN { max_r = 0.0; }
-
                 waveform.push((min_l, max_l, min_r, max_r));
             }
-        }
-        else
-        {
-            // Mono - return actual mono data (same values for both channels to indicate mono)
-            for i in 0..num_pixels
+            else
             {
-                let pixel_start_frame = start_frame + (i as f64 * samples_per_pixel) as usize;
-                let pixel_end_frame = (start_frame + ((i + 1) as f64 * samples_per_pixel) as usize).min(end_frame);
-
-                if pixel_start_frame >= pixel_end_frame
-                {
-                    waveform.push((0.0, 0.0, 0.0, 0.0));
-                    continue;
-                }
-
-                let mut min_val = f32::MAX;
-                let mut max_val = f32::MIN;
+                // Mono - single channel
+                let mut min_val = 0.0f32;
+                let mut max_val = 0.0f32;
 
                 for frame in pixel_start_frame..pixel_end_frame
                 {
-                    if frame < self.audio_data.len()
+                    let idx = frame * self.channels;
+                    if idx < self.audio_data.len()
                     {
-                        let sample = self.audio_data[frame];
+                        let sample = self.audio_data[idx];
                         min_val = min_val.min(sample);
                         max_val = max_val.max(sample);
                     }
                 }
 
-                if min_val == f32::MAX { min_val = 0.0; }
-                if max_val == f32::MIN { max_val = 0.0; }
-
-                // Use NaN as a marker for mono data
-                waveform.push((min_val, max_val, f32::NAN, f32::NAN));
+                // For mono, duplicate the values to maintain consistent tuple size
+                waveform.push((min_val, max_val, min_val, max_val));
             }
         }
 
         waveform
     }
-
     pub fn play(&mut self, start_time: Option<f64>, end_time: Option<f64>) -> Result<(), String>
     {
         // If both start and end are None and we have paused playback, resume
