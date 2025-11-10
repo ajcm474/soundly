@@ -21,11 +21,38 @@ class WaveformWidget(QWidget):
         self.setMinimumHeight(200)
         self.setMouseTracking(True)
 
+    def format_time(self, time_seconds):
+        """Format time in human-readable format"""
+        hours = int(time_seconds // 3600)
+        minutes = int((time_seconds % 3600) // 60)
+        seconds = time_seconds % 60
+
+        parts = []
+        if hours > 0:
+            parts.append(f"{hours}h")
+        if minutes > 0:
+            parts.append(f"{minutes}m")
+
+        # Format seconds based on zoom level
+        if self.zoom_level > 100:
+            # Show milliseconds when zoomed in
+            parts.append(f"{seconds:.3f}s")
+        elif self.zoom_level > 10:
+            parts.append(f"{seconds:.2f}s")
+        elif self.zoom_level > 1:
+            parts.append(f"{seconds:.1f}s")
+        else:
+            parts.append(f"{int(seconds)}s")
+
+        return ''.join(parts) if parts else "0s"
+
     def set_waveform(self, data, duration):
         self.waveform_data = data
         self.duration = duration
-        # Check if we have stereo data (4 values per sample)
-        self.is_stereo = len(data) > 0 and len(data[0]) == 4
+        # Check if we have mono data (NaN in the right channel values)
+        self.is_stereo = len(data) > 0 and not (len(data[0]) == 4 and
+                                                (data[0][2] != data[0][2] or  # Check for NaN
+                                                 data[0][2] == data[0][0]))   # Or same values
 
         # Initialize view to show full waveform
         if self.zoom_level == 1.0:
@@ -108,7 +135,15 @@ class WaveformWidget(QWidget):
 
         samples_to_draw = end_sample - start_sample
 
-        if self.is_stereo:
+        # Draw waveforms - check for actual mono data
+        is_mono = False
+        if len(self.waveform_data) > 0:
+            # Check if this is mono data (NaN markers or identical channels)
+            sample = self.waveform_data[0]
+            if len(sample) == 4:
+                is_mono = (sample[2] != sample[2]) or (sample[0] == sample[2] and sample[1] == sample[3])
+
+        if not is_mono and self.is_stereo:
             # Draw stereo waveform
             channel_height = waveform_height / 2
 
@@ -147,7 +182,7 @@ class WaveformWidget(QWidget):
                 y_max_r = channel_height + (channel_height / 2) - (max_r * channel_height * 0.45)
                 painter.drawLine(QPointF(x, y_min_r), QPointF(x, y_max_r))
         else:
-            # Draw mono waveform
+            # Draw mono waveform - single channel in center
             center_y = waveform_height / 2
 
             # Draw center line
@@ -165,14 +200,8 @@ class WaveformWidget(QWidget):
                 # Map sample position to x coordinate
                 x = (i / samples_to_draw) * width
 
-                if len(self.waveform_data[sample_idx]) == 4:
-                    # Stereo data, average it
-                    min_l, max_l, min_r, max_r = self.waveform_data[sample_idx]
-                    min_val = (min_l + min_r) / 2
-                    max_val = (max_l + max_r) / 2
-                else:
-                    # Mono data
-                    min_val, max_val = self.waveform_data[sample_idx]
+                # Get mono data (from first two values)
+                min_val, max_val = self.waveform_data[sample_idx][:2]
 
                 y_min = center_y - (min_val * center_y * 0.9)
                 y_max = center_y - (max_val * center_y * 0.9)
@@ -245,18 +274,11 @@ class WaveformWidget(QWidget):
             # Draw tick mark
             painter.drawLine(int(x), ruler_height - 10, int(x), ruler_height - 1)
 
-            # Format time label
-            if format_str.startswith("%d:"):
-                # Minutes:seconds format
-                minutes = int(current_time // 60)
-                seconds = int(current_time % 60)
-                label = format_str % (minutes, seconds)
-            else:
-                # Seconds format
-                label = format_str % current_time
+            # Format time label using the new formatter
+            label = self.format_time(current_time)
 
             # Draw label
-            rect = QRectF(x - 30, 2, 60, ruler_height - 12)
+            rect = QRectF(x - 40, 2, 80, ruler_height - 12)
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, label)
 
             current_time += interval

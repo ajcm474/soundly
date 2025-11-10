@@ -1,9 +1,10 @@
 import sys
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QFileDialog, QMessageBox,
-                             QDialog, QComboBox, QLabel, QDialogButtonBox)
+                             QDialog, QComboBox, QLabel, QDialogButtonBox,
+                             QMenu, QMenuBar)
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtGui import QKeySequence, QShortcut, QAction
 from waveform_widget import WaveformWidget
 import soundly
 
@@ -74,6 +75,44 @@ class AudioEditorWindow(QMainWindow):
         self.playback_timer.start(50)  # Check every 50ms
 
         self.init_ui()
+        self.create_menu_bar()
+
+    def create_menu_bar(self):
+        menubar = self.menuBar()
+
+        # File menu
+        file_menu = menubar.addMenu('File')
+
+        # Import submenu
+        import_menu = file_menu.addMenu('Import')
+
+        import_audio_action = QAction('Audio File...', self)
+        import_audio_action.triggered.connect(self.import_file)
+        import_menu.addAction(import_audio_action)
+
+        file_menu.addSeparator()
+
+        # Export submenu
+        export_menu = file_menu.addMenu('Export')
+
+        export_wav_action = QAction('WAV...', self)
+        export_wav_action.triggered.connect(lambda: self.export_file('wav'))
+        export_menu.addAction(export_wav_action)
+
+        export_flac_action = QAction('FLAC...', self)
+        export_flac_action.triggered.connect(lambda: self.export_file('flac'))
+        export_menu.addAction(export_flac_action)
+
+        export_mp3_action = QAction('MP3...', self)
+        export_mp3_action.triggered.connect(lambda: self.export_file('mp3'))
+        export_menu.addAction(export_mp3_action)
+
+        file_menu.addSeparator()
+
+        exit_action = QAction('Exit', self)
+        exit_action.setShortcut('Ctrl+Q')
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
 
     def init_ui(self):
         self.setWindowTitle('Audio Editor')
@@ -90,9 +129,6 @@ class AudioEditorWindow(QMainWindow):
         button_layout = QHBoxLayout()
 
         # Create buttons
-        self.import_btn = QPushButton('Import')
-        self.import_btn.clicked.connect(self.import_file)
-
         self.play_btn = QPushButton('Play')
         self.play_btn.clicked.connect(self.play)
 
@@ -109,18 +145,13 @@ class AudioEditorWindow(QMainWindow):
         self.repeat_btn.setCheckable(True)
         self.repeat_btn.clicked.connect(self.toggle_repeat)
 
-        self.export_btn = QPushButton('Export')
-        self.export_btn.clicked.connect(self.export_file)
-
         # Add buttons to layout
-        button_layout.addWidget(self.import_btn)
         button_layout.addWidget(self.rewind_btn)
         button_layout.addWidget(self.play_btn)
         button_layout.addWidget(self.pause_btn)
         button_layout.addWidget(self.skip_btn)
         button_layout.addWidget(self.repeat_btn)
         button_layout.addStretch()
-        button_layout.addWidget(self.export_btn)
 
         # Waveform widget
         self.waveform = WaveformWidget()
@@ -180,26 +211,13 @@ class AudioEditorWindow(QMainWindow):
             if duration == 0:
                 return
 
-            # Calculate samples for the visible portion
+            # Use the new Rust method for visible range
             width = self.waveform.width()
-
-            # Get the visible time range from the waveform widget
-            view_duration = duration / self.waveform.zoom_level
-
-            # Calculate samples per pixel for the current zoom level
-            samples_per_pixel = max(1, int(self.engine.get_sample_rate() * view_duration / width))
-
-            # Get waveform data
-            waveform_data = self.engine.get_waveform_data(samples_per_pixel)
-
-            # Convert to stereo format if we have channel info
-            try:
-                channels = self.engine.get_channels()
-                if channels == 2:
-                    # Data should already be in stereo format from Rust
-                    pass
-            except:
-                pass  # Method might not exist yet
+            waveform_data = self.engine.get_waveform_for_range(
+                self.waveform.view_start_time,
+                self.waveform.view_end_time,
+                width
+            )
 
             self.waveform.set_waveform(waveform_data, duration)
         except Exception as e:
@@ -341,50 +359,56 @@ class AudioEditorWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, 'Error', f'Delete error: {str(e)}')
 
-    def export_file(self):
-        file_path, selected_filter = QFileDialog.getSaveFileName(
-            self,
-            "Export Audio File",
-            "",
-            "WAV Files (*.wav);;FLAC Files (*.flac);;MP3 Files (*.mp3)"
-        )
+    def export_file(self, file_type='wav'):
+        try:
+            compression_level = None
+            bitrate = None
 
-        if file_path:
-            try:
-                # Determine file type
-                file_type = "wav"
-                if file_path.lower().endswith('.flac'):
-                    file_type = "flac"
-                elif file_path.lower().endswith('.mp3'):
-                    file_type = "mp3"
+            # Show options dialog first for FLAC and MP3
+            if file_type in ['flac', 'mp3']:
+                dialog = ExportDialog(self, file_type)
+                if dialog.exec() != QDialog.DialogCode.Accepted:
+                    return  # User cancelled
 
-                compression_level = None
-                bitrate = None
+                if file_type == 'flac':
+                    compression_level = dialog.get_compression_level()
+                elif file_type == 'mp3':
+                    bitrate = dialog.get_bitrate()
 
-                # Show options dialog for FLAC and MP3
-                if file_type in ["flac", "mp3"]:
-                    dialog = ExportDialog(self, file_type)
-                    if dialog.exec() == QDialog.DialogCode.Accepted:
-                        if file_type == "flac":
-                            compression_level = dialog.get_compression_level()
-                        elif file_type == "mp3":
-                            bitrate = dialog.get_bitrate()
-                    else:
-                        return  # User cancelled
+            # Then show file save dialog
+            filter_map = {
+                'wav': "WAV Files (*.wav)",
+                'flac': "FLAC Files (*.flac)",
+                'mp3': "MP3 Files (*.mp3)"
+            }
 
-                selection = self.waveform.get_selection()
-                if selection:
-                    start, end = selection
-                    self.engine.export_audio(file_path, start, end,
-                                             compression_level, bitrate)
-                    self.statusBar().showMessage(f'Exported selection: {file_path}')
-                else:
-                    # Export entire file when no selection
-                    self.engine.export_audio(file_path, 0.0, self.engine.get_duration(),
-                                             compression_level, bitrate)
-                    self.statusBar().showMessage(f'Exported entire file: {file_path}')
-            except Exception as e:
-                QMessageBox.critical(self, 'Error', f'Export error: {str(e)}')
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                f"Export as {file_type.upper()}",
+                "",
+                filter_map.get(file_type, "All Files (*)")
+            )
+
+            if not file_path:
+                return
+
+            # Add extension if not present
+            if not file_path.lower().endswith(f'.{file_type}'):
+                file_path += f'.{file_type}'
+
+            selection = self.waveform.get_selection()
+            if selection:
+                start, end = selection
+                self.engine.export_audio(file_path, start, end, compression_level, bitrate)
+                self.statusBar().showMessage(f'Exported selection: {file_path}')
+            else:
+                # Export entire file when no selection
+                self.engine.export_audio(file_path, 0.0, self.engine.get_duration(),
+                                         compression_level, bitrate)
+                self.statusBar().showMessage(f'Exported entire file: {file_path}')
+
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', f'Export error: {str(e)}')
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

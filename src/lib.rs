@@ -40,6 +40,11 @@ impl AudioEditor
         Ok(self.engine.lock().unwrap().get_stereo_waveform_data(samples_per_pixel))
     }
 
+    fn get_waveform_for_range(&self, start_time: f64, end_time: f64, num_pixels: usize) -> PyResult<Vec<(f32, f32, f32, f32)>>
+    {
+        Ok(self.engine.lock().unwrap().get_waveform_for_range(start_time, end_time, num_pixels))
+    }
+
     fn get_sample_rate(&self) -> PyResult<u32>
     {
         Ok(self.engine.lock().unwrap().get_sample_rate())

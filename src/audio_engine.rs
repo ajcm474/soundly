@@ -340,6 +340,106 @@ impl AudioEngine
         waveform
     }
 
+    pub fn get_waveform_for_range(&self, start_time: f64, end_time: f64, num_pixels: usize) -> Vec<(f32, f32, f32, f32)>
+    {
+        if self.audio_data.is_empty() || num_pixels == 0
+        {
+            return Vec::new();
+        }
+
+        let start_frame = ((start_time * self.sample_rate as f64) as usize).min(self.audio_data.len() / self.channels);
+        let end_frame = ((end_time * self.sample_rate as f64) as usize).min(self.audio_data.len() / self.channels);
+
+        if start_frame >= end_frame
+        {
+            return Vec::new();
+        }
+
+        let frame_count = end_frame - start_frame;
+        let samples_per_pixel = ((frame_count as f64) / (num_pixels as f64)).max(1.0);
+
+        let mut waveform = Vec::with_capacity(num_pixels);
+
+        if self.channels == 2
+        {
+            // Stereo
+            for i in 0..num_pixels
+            {
+                let pixel_start_frame = start_frame + (i as f64 * samples_per_pixel) as usize;
+                let pixel_end_frame = (start_frame + ((i + 1) as f64 * samples_per_pixel) as usize).min(end_frame);
+
+                if pixel_start_frame >= pixel_end_frame
+                {
+                    waveform.push((0.0, 0.0, 0.0, 0.0));
+                    continue;
+                }
+
+                let mut min_l = f32::MAX;
+                let mut max_l = f32::MIN;
+                let mut min_r = f32::MAX;
+                let mut max_r = f32::MIN;
+
+                for frame in pixel_start_frame..pixel_end_frame
+                {
+                    let idx = frame * 2;
+                    if idx + 1 < self.audio_data.len()
+                    {
+                        let left = self.audio_data[idx];
+                        let right = self.audio_data[idx + 1];
+
+                        min_l = min_l.min(left);
+                        max_l = max_l.max(left);
+                        min_r = min_r.min(right);
+                        max_r = max_r.max(right);
+                    }
+                }
+
+                if min_l == f32::MAX { min_l = 0.0; }
+                if max_l == f32::MIN { max_l = 0.0; }
+                if min_r == f32::MAX { min_r = 0.0; }
+                if max_r == f32::MIN { max_r = 0.0; }
+
+                waveform.push((min_l, max_l, min_r, max_r));
+            }
+        }
+        else
+        {
+            // Mono - return actual mono data (same values for both channels to indicate mono)
+            for i in 0..num_pixels
+            {
+                let pixel_start_frame = start_frame + (i as f64 * samples_per_pixel) as usize;
+                let pixel_end_frame = (start_frame + ((i + 1) as f64 * samples_per_pixel) as usize).min(end_frame);
+
+                if pixel_start_frame >= pixel_end_frame
+                {
+                    waveform.push((0.0, 0.0, 0.0, 0.0));
+                    continue;
+                }
+
+                let mut min_val = f32::MAX;
+                let mut max_val = f32::MIN;
+
+                for frame in pixel_start_frame..pixel_end_frame
+                {
+                    if frame < self.audio_data.len()
+                    {
+                        let sample = self.audio_data[frame];
+                        min_val = min_val.min(sample);
+                        max_val = max_val.max(sample);
+                    }
+                }
+
+                if min_val == f32::MAX { min_val = 0.0; }
+                if max_val == f32::MIN { max_val = 0.0; }
+
+                // Use NaN as a marker for mono data
+                waveform.push((min_val, max_val, f32::NAN, f32::NAN));
+            }
+        }
+
+        waveform
+    }
+
     pub fn play(&mut self, start_time: Option<f64>, end_time: Option<f64>) -> Result<(), String>
     {
         // If both start and end are None and we have paused playback, resume
