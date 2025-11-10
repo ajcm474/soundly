@@ -57,15 +57,27 @@ class WaveformWidget(QWidget):
         width = self.width()
         height = self.height()
 
+        # Reserve space for time ruler
+        ruler_height = 30
+        waveform_height = height - ruler_height
+
         # Background
         painter.fillRect(self.rect(), QColor(30, 30, 30))
 
         if not self.waveform_data or self.duration == 0:
             return
 
+        # Draw time ruler
+        self.draw_time_ruler(painter, width, ruler_height)
+
+        # Translate painter for waveform drawing
+        painter.save()
+        painter.translate(0, ruler_height)
+
         # Calculate visible range
         visible_duration = self.view_end_time - self.view_start_time
         if visible_duration <= 0:
+            painter.restore()
             return
 
         # Draw selection (if visible)
@@ -77,7 +89,7 @@ class WaveformWidget(QWidget):
             if sel_end >= self.view_start_time and sel_start <= self.view_end_time:
                 start_x = self.time_to_x(sel_start)
                 end_x = self.time_to_x(sel_end)
-                painter.fillRect(QRectF(start_x, 0, end_x - start_x, height),
+                painter.fillRect(QRectF(start_x, 0, end_x - start_x, waveform_height),
                                  QColor(100, 150, 255, 80))
 
         # Calculate which samples to draw
@@ -98,7 +110,7 @@ class WaveformWidget(QWidget):
 
         if self.is_stereo:
             # Draw stereo waveform
-            channel_height = height / 2
+            channel_height = waveform_height / 2
 
             # Draw center lines for each channel
             painter.setPen(QPen(QColor(80, 80, 80), 1))
@@ -136,7 +148,7 @@ class WaveformWidget(QWidget):
                 painter.drawLine(QPointF(x, y_min_r), QPointF(x, y_max_r))
         else:
             # Draw mono waveform
-            center_y = height / 2
+            center_y = waveform_height / 2
 
             # Draw center line
             painter.setPen(QPen(QColor(80, 80, 80), 1))
@@ -173,10 +185,88 @@ class WaveformWidget(QWidget):
                 self.playback_position <= self.view_end_time):
             x = self.time_to_x(self.playback_position)
             painter.setPen(QPen(QColor(255, 100, 100), 2))
-            painter.drawLine(int(x), 0, int(x), height)
+            painter.drawLine(int(x), 0, int(x), waveform_height)
+
+    def draw_time_ruler(self, painter, width, ruler_height):
+        """Draw time ruler at the top of the widget"""
+        # Background for ruler
+        painter.fillRect(0, 0, width, ruler_height, QColor(40, 40, 40))
+
+        # Border line
+        painter.setPen(QPen(QColor(80, 80, 80), 1))
+        painter.drawLine(0, ruler_height - 1, width, ruler_height - 1)
+
+        # Calculate appropriate time interval based on zoom
+        visible_duration = self.view_end_time - self.view_start_time
+
+        # Determine grid interval
+        intervals = [
+            (0.001, "%.3fs"),   # milliseconds
+            (0.01, "%.2fs"),    # 10ms
+            (0.1, "%.1fs"),     # 100ms
+            (1.0, "%.0fs"),     # seconds
+            (5.0, "%.0fs"),     # 5 seconds
+            (10.0, "%.0fs"),    # 10 seconds
+            (30.0, "%.0fs"),    # 30 seconds
+            (60.0, "%d:%02d"),  # minutes
+            (300.0, "%d:%02d"), # 5 minutes
+            (600.0, "%d:%02d"), # 10 minutes
+        ]
+
+        # Find appropriate interval (aim for 50-200 pixels between marks)
+        target_spacing = 100
+        time_per_pixel = visible_duration / width
+        ideal_interval = target_spacing * time_per_pixel
+
+        interval = intervals[0][0]
+        format_str = intervals[0][1]
+
+        for int_val, fmt in intervals:
+            if int_val >= ideal_interval * 0.5:
+                interval = int_val
+                format_str = fmt
+                break
+
+        # Draw time marks
+        painter.setPen(QPen(QColor(200, 200, 200), 1))
+        font = painter.font()
+        font.setPointSize(8)
+        painter.setFont(font)
+
+        # Start from the first interval mark after view_start_time
+        first_mark = (self.view_start_time // interval) * interval
+        if first_mark < self.view_start_time:
+            first_mark += interval
+
+        current_time = first_mark
+        while current_time <= self.view_end_time:
+            x = self.time_to_x(current_time)
+
+            # Draw tick mark
+            painter.drawLine(int(x), ruler_height - 10, int(x), ruler_height - 1)
+
+            # Format time label
+            if format_str.startswith("%d:"):
+                # Minutes:seconds format
+                minutes = int(current_time // 60)
+                seconds = int(current_time % 60)
+                label = format_str % (minutes, seconds)
+            else:
+                # Seconds format
+                label = format_str % current_time
+
+            # Draw label
+            rect = QRectF(x - 30, 2, 60, ruler_height - 12)
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, label)
+
+            current_time += interval
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
+            # Ignore clicks in the ruler area
+            if event.position().y() < 30:
+                return
+
             self.is_selecting = True
             time = self.x_to_time(event.position().x())
             self.selection_start = time
@@ -198,12 +288,23 @@ class WaveformWidget(QWidget):
         # Get the position under the mouse
         mouse_time = self.x_to_time(event.position().x())
 
+        # Calculate maximum zoom
+        max_zoom = 10000.0
+        if hasattr(self.parent().parent(), 'engine'):
+            try:
+                sample_rate = self.parent().parent().engine.get_sample_rate()
+                duration = self.parent().parent().engine.get_duration()
+                total_samples = sample_rate * duration
+                max_zoom = total_samples / 100  # At least 100 samples visible
+            except:
+                pass
+
         # Zoom based on wheel direction
         delta = event.angleDelta().y()
         if delta > 0:
             # Zoom in
             old_zoom = self.zoom_level
-            self.zoom_level = min(100.0, self.zoom_level * 1.2)
+            self.zoom_level = min(max_zoom, self.zoom_level * 1.2)
 
             if self.zoom_level != old_zoom and self.duration > 0:
                 visible_duration = self.duration / self.zoom_level
@@ -304,7 +405,19 @@ class WaveformWidget(QWidget):
     def zoom_in(self):
         """Zoom in on the waveform"""
         old_zoom = self.zoom_level
-        self.zoom_level = min(100.0, self.zoom_level * 1.5)
+
+        # Calculate maximum zoom based on keeping at least 100 samples visible
+        if hasattr(self.parent().parent(), 'engine'):
+            try:
+                sample_rate = self.parent().parent().engine.get_sample_rate()
+                duration = self.parent().parent().engine.get_duration()
+                total_samples = sample_rate * duration
+                max_zoom = total_samples / 100  # At least 100 samples visible
+                self.zoom_level = min(max_zoom, self.zoom_level * 1.5)
+            except:
+                self.zoom_level = min(10000.0, self.zoom_level * 1.5)
+        else:
+            self.zoom_level = min(10000.0, self.zoom_level * 1.5)
 
         if self.zoom_level != old_zoom and self.duration > 0:
             visible_duration = self.duration / self.zoom_level

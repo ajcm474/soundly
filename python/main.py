@@ -331,6 +331,11 @@ class AudioEditorWindow(QMainWindow):
                 start, end = selection
                 self.engine.delete_region(start, end)
                 self.waveform.clear_selection()
+
+                # Set playback position to where deleted region started
+                self.engine.set_playback_position(start)
+                self.waveform.set_playback_position(start)
+
                 self.update_waveform()
                 self.statusBar().showMessage(f'Deleted region: {start:.2f}s - {end:.2f}s')
             except Exception as e:
