@@ -35,9 +35,9 @@ impl AudioEditor
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to load file: {}", e)))
     }
 
-    fn get_waveform_data(&self, samples_per_pixel: usize) -> PyResult<Vec<(f32, f32)>>
+    fn get_waveform_data(&self, samples_per_pixel: usize) -> PyResult<Vec<(f32, f32, f32, f32)>>
     {
-        Ok(self.engine.lock().unwrap().get_waveform_data(samples_per_pixel))
+        Ok(self.engine.lock().unwrap().get_stereo_waveform_data(samples_per_pixel))
     }
 
     fn get_sample_rate(&self) -> PyResult<u32>
@@ -48,6 +48,11 @@ impl AudioEditor
     fn get_duration(&self) -> PyResult<f64>
     {
         Ok(self.engine.lock().unwrap().get_duration())
+    }
+
+    fn get_channels(&self) -> PyResult<usize>
+    {
+        Ok(self.engine.lock().unwrap().get_channels())
     }
 
     fn play(&mut self, start_time: Option<f64>, end_time: Option<f64>) -> PyResult<()>

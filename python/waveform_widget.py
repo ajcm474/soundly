@@ -14,6 +14,7 @@ class WaveformWidget(QWidget):
         self.playback_position = 0.0
         self.zoom_level = 1.0
         self.scroll_offset = 0.0
+        self.is_stereo = False
 
         self.setMinimumHeight(200)
         self.setMouseTracking(True)
@@ -21,6 +22,8 @@ class WaveformWidget(QWidget):
     def set_waveform(self, data, duration):
         self.waveform_data = data
         self.duration = duration
+        # Check if we have stereo data
+        self.is_stereo = len(data) > 0 and len(data[0]) == 4  # min_L, max_L, min_R, max_R
         self.update()
 
     def paintEvent(self, event):
@@ -29,14 +32,9 @@ class WaveformWidget(QWidget):
 
         width = self.width()
         height = self.height()
-        center_y = height / 2
 
         # Background
         painter.fillRect(self.rect(), QColor(30, 30, 30))
-
-        # Draw center line (fixed - use integers)
-        painter.setPen(QPen(QColor(80, 80, 80), 1))
-        painter.drawLine(0, int(center_y), width, int(center_y))
 
         if not self.waveform_data:
             return
@@ -48,21 +46,64 @@ class WaveformWidget(QWidget):
             painter.fillRect(QRectF(start_x, 0, end_x - start_x, height),
                              QColor(100, 150, 255, 80))
 
-        # Draw waveform
-        painter.setPen(QPen(QColor(100, 200, 255), 1))
+        if self.is_stereo:
+            # Draw stereo waveform
+            channel_height = height / 2
 
-        samples_to_draw = min(len(self.waveform_data), width)
-        for i in range(samples_to_draw):
-            if i >= len(self.waveform_data):
-                break
+            # Draw center lines for each channel
+            painter.setPen(QPen(QColor(80, 80, 80), 1))
+            painter.drawLine(0, int(channel_height / 2), width, int(channel_height / 2))
+            painter.drawLine(0, int(channel_height + channel_height / 2), width, int(channel_height + channel_height / 2))
 
-            min_val, max_val = self.waveform_data[i]
-            x = (i / len(self.waveform_data)) * width
+            # Draw channel labels
+            painter.setPen(QPen(QColor(150, 150, 150), 1))
+            painter.drawText(5, 15, "L")
+            painter.drawText(5, int(channel_height + 15), "R")
 
-            y_min = center_y - (min_val * center_y * 0.9)
-            y_max = center_y - (max_val * center_y * 0.9)
+            # Draw waveforms
+            painter.setPen(QPen(QColor(100, 200, 255), 1))
 
-            painter.drawLine(QPointF(x, y_min), QPointF(x, y_max))
+            samples_to_draw = min(len(self.waveform_data), width)
+            for i in range(samples_to_draw):
+                if i >= len(self.waveform_data):
+                    break
+
+                # Left channel
+                min_l, max_l, min_r, max_r = self.waveform_data[i]
+                x = (i / len(self.waveform_data)) * width
+
+                # Left channel
+                y_min_l = (channel_height / 2) - (min_l * channel_height * 0.45)
+                y_max_l = (channel_height / 2) - (max_l * channel_height * 0.45)
+                painter.drawLine(QPointF(x, y_min_l), QPointF(x, y_max_l))
+
+                # Right channel
+                y_min_r = channel_height + (channel_height / 2) - (min_r * channel_height * 0.45)
+                y_max_r = channel_height + (channel_height / 2) - (max_r * channel_height * 0.45)
+                painter.drawLine(QPointF(x, y_min_r), QPointF(x, y_max_r))
+        else:
+            # Draw mono waveform
+            center_y = height / 2
+
+            # Draw center line
+            painter.setPen(QPen(QColor(80, 80, 80), 1))
+            painter.drawLine(0, int(center_y), width, int(center_y))
+
+            # Draw waveform
+            painter.setPen(QPen(QColor(100, 200, 255), 1))
+
+            samples_to_draw = min(len(self.waveform_data), width)
+            for i in range(samples_to_draw):
+                if i >= len(self.waveform_data):
+                    break
+
+                min_val, max_val = self.waveform_data[i]
+                x = (i / len(self.waveform_data)) * width
+
+                y_min = center_y - (min_val * center_y * 0.9)
+                y_max = center_y - (max_val * center_y * 0.9)
+
+                painter.drawLine(QPointF(x, y_min), QPointF(x, y_max))
 
         # Draw playback position
         if self.playback_position > 0:

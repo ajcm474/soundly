@@ -133,9 +133,13 @@ class AudioEditorWindow(QMainWindow):
         self.setup_shortcuts()
 
     def setup_shortcuts(self):
-        # Zoom shortcuts
-        zoom_in = QShortcut(QKeySequence('Ctrl++'), self)
+        # Zoom shortcuts - Fixed to handle + key properly
+        zoom_in = QShortcut(QKeySequence('Ctrl+='), self)
         zoom_in.activated.connect(self.waveform.zoom_in)
+
+        # Also support Ctrl+Plus for zoom in
+        zoom_in_plus = QShortcut(QKeySequence.StandardKey.ZoomIn, self)
+        zoom_in_plus.activated.connect(self.waveform.zoom_in)
 
         zoom_out = QShortcut(QKeySequence('Ctrl+-'), self)
         zoom_out.activated.connect(self.waveform.zoom_out)
@@ -181,14 +185,20 @@ class AudioEditorWindow(QMainWindow):
     def play(self):
         try:
             selection = self.waveform.get_selection()
+            current_pos = self.engine.get_playback_position()
+
             if selection:
                 start, end = selection
-                # Always play from start of selection when selection exists
-                self.engine.stop()  # Clear any existing playback state
-                self.engine.play(start, end)
+                # Only restart from beginning of selection if we're outside the selection
+                # or at the end of the selection
+                if current_pos < start or current_pos >= end:
+                    self.engine.stop()
+                    self.engine.play(start, end)
+                else:
+                    # Resume from current position within selection
+                    self.engine.play(None, None)
             else:
                 # Resume from current position or start from beginning
-                current_pos = self.engine.get_playback_position()
                 if current_pos > 0 and current_pos < self.engine.get_duration():
                     # Resume from current position
                     self.engine.play(None, None)
@@ -264,6 +274,7 @@ class AudioEditorWindow(QMainWindow):
                             # Stop and restart from selection beginning
                             self.engine.stop()
                             self.engine.play(start, end)
+                            self.waveform.set_playback_position(start)
                         else:
                             self.engine.stop()
                             self.waveform.set_playback_position(end)
@@ -274,6 +285,7 @@ class AudioEditorWindow(QMainWindow):
                             # Stop and restart from beginning
                             self.engine.stop()
                             self.engine.play(None, None)
+                            self.waveform.set_playback_position(0)
                         else:
                             self.engine.stop()
                             self.waveform.set_playback_position(duration)
