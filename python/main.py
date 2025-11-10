@@ -173,12 +173,35 @@ class AudioEditorWindow(QMainWindow):
 
     def update_waveform(self):
         try:
+            if not hasattr(self, 'engine'):
+                return
+
+            duration = self.engine.get_duration()
+            if duration == 0:
+                return
+
+            # Calculate samples for the visible portion
             width = self.waveform.width()
-            samples_per_pixel = max(1, int(self.engine.get_sample_rate() *
-                                           self.engine.get_duration() /
-                                           width / self.waveform.zoom_level))
+
+            # Get the visible time range from the waveform widget
+            view_duration = duration / self.waveform.zoom_level
+
+            # Calculate samples per pixel for the current zoom level
+            samples_per_pixel = max(1, int(self.engine.get_sample_rate() * view_duration / width))
+
+            # Get waveform data
             waveform_data = self.engine.get_waveform_data(samples_per_pixel)
-            self.waveform.set_waveform(waveform_data, self.engine.get_duration())
+
+            # Convert to stereo format if we have channel info
+            try:
+                channels = self.engine.get_channels()
+                if channels == 2:
+                    # Data should already be in stereo format from Rust
+                    pass
+            except:
+                pass  # Method might not exist yet
+
+            self.waveform.set_waveform(waveform_data, duration)
         except Exception as e:
             print(f"Error updating waveform: {e}")
 
@@ -267,28 +290,37 @@ class AudioEditorWindow(QMainWindow):
 
                 # Check if we've reached the end of selection/file
                 selection = self.waveform.get_selection()
+                duration = self.engine.get_duration()
+
+                should_repeat = False
+                end_position = duration
+
                 if selection:
                     start, end = selection
-                    if position >= end:
-                        if self.is_repeating:
-                            # Stop and restart from selection beginning
-                            self.engine.stop()
-                            self.engine.play(start, end)
-                            self.waveform.set_playback_position(start)
-                        else:
+                    end_position = end
+                    if position >= end - 0.05:  # Small buffer before the end
+                        should_repeat = self.is_repeating
+                        if not self.is_repeating:
                             self.engine.stop()
                             self.waveform.set_playback_position(end)
                 else:
-                    duration = self.engine.get_duration()
-                    if position >= duration:
-                        if self.is_repeating:
-                            # Stop and restart from beginning
-                            self.engine.stop()
-                            self.engine.play(None, None)
-                            self.waveform.set_playback_position(0)
-                        else:
+                    if position >= duration - 0.05:  # Small buffer before the end
+                        should_repeat = self.is_repeating
+                        if not self.is_repeating:
                             self.engine.stop()
                             self.waveform.set_playback_position(duration)
+
+                # Handle repeat
+                if should_repeat:
+                    self.engine.stop()
+                    if selection:
+                        start, end = selection
+                        self.engine.play(start, end)
+                        self.waveform.set_playback_position(start)
+                    else:
+                        self.engine.play(None, None)
+                        self.waveform.set_playback_position(0)
+
         except Exception as e:
             print(f"Error checking playback: {e}")
 
