@@ -10,7 +10,19 @@ import soundly
 
 
 class ExportDialog(QDialog):
+    """Dialog for configuring export options for different audio formats."""
+
     def __init__(self, parent=None, file_type="wav"):
+        """
+        Initialize the export dialog.
+
+        Parameters
+        ----------
+        parent : QWidget, optional
+            parent widget
+        file_type : str
+            type of file being exported ('wav', 'flac', or 'mp3')
+        """
         super().__init__(parent)
         self.file_type = file_type
         self.setWindowTitle("Export Options")
@@ -27,7 +39,7 @@ class ExportDialog(QDialog):
                 "5 - Default",
                 "6", "7", "8 - Best"
             ])
-            self.compression_combo.setCurrentIndex(5)  # Default to 5
+            self.compression_combo.setCurrentIndex(5)
             layout.addWidget(self.compression_combo)
 
         elif file_type == "mp3":
@@ -36,11 +48,11 @@ class ExportDialog(QDialog):
             self.bitrate_combo.addItems([
                 "128 kbps",
                 "160 kbps",
-                "192 kbps",
+                "192 kbps",     # default
                 "256 kbps",
                 "320 kbps"
             ])
-            self.bitrate_combo.setCurrentIndex(2)  # Default to 192
+            self.bitrate_combo.setCurrentIndex(2)
             layout.addWidget(self.bitrate_combo)
 
         buttons = QDialogButtonBox(
@@ -54,11 +66,27 @@ class ExportDialog(QDialog):
         self.setLayout(layout)
 
     def get_compression_level(self):
+        """
+        Get selected FLAC compression level.
+
+        Returns
+        -------
+        int or None
+            compression level 0-8, or None if not FLAC export
+        """
         if self.file_type == "flac":
             return self.compression_combo.currentIndex()
         return None
 
     def get_bitrate(self):
+        """
+        Get selected MP3 bitrate.
+
+        Returns
+        -------
+        int or None
+            bitrate in kbps (128-320), or None if not MP3 export
+        """
         if self.file_type == "mp3":
             text = self.bitrate_combo.currentText()
             return int(text.split()[0])
@@ -66,24 +94,27 @@ class ExportDialog(QDialog):
 
 
 class AudioEditorWindow(QMainWindow):
+    """Main application window for the audio editor."""
+
     def __init__(self):
+        """Initialize the main window and audio engine."""
         super().__init__()
         self.engine = soundly.AudioEditor()
         self.is_repeating = False
         self.playback_timer = QTimer()
         self.playback_timer.timeout.connect(self.check_playback)
-        self.playback_timer.start(50)  # Check every 50ms
+        self.playback_timer.start(50)
 
         self.init_ui()
         self.create_menu_bar()
 
     def create_menu_bar(self):
+        """Create the application menu bar with file operations."""
         menubar = self.menuBar()
 
-        # File menu
         file_menu = menubar.addMenu('File')
 
-        # Import submenu
+        # import submenu
         import_menu = file_menu.addMenu('Import')
 
         import_audio_action = QAction('Audio File...', self)
@@ -92,7 +123,7 @@ class AudioEditorWindow(QMainWindow):
 
         file_menu.addSeparator()
 
-        # Export submenu
+        # export submenu
         export_menu = file_menu.addMenu('Export')
 
         export_wav_action = QAction('WAV...', self)
@@ -115,20 +146,17 @@ class AudioEditorWindow(QMainWindow):
         file_menu.addAction(exit_action)
 
     def init_ui(self):
+        """Initialize the user interface layout and controls."""
         self.setWindowTitle('Audio Editor')
         self.setGeometry(100, 100, 1200, 600)
 
-        # Central widget
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
 
-        # Main layout
         main_layout = QVBoxLayout(central_widget)
 
-        # Button layout
         button_layout = QHBoxLayout()
 
-        # Create buttons
         self.play_btn = QPushButton('Play')
         self.play_btn.clicked.connect(self.play)
 
@@ -145,7 +173,6 @@ class AudioEditorWindow(QMainWindow):
         self.repeat_btn.setCheckable(True)
         self.repeat_btn.clicked.connect(self.toggle_repeat)
 
-        # Add buttons to layout
         button_layout.addWidget(self.rewind_btn)
         button_layout.addWidget(self.play_btn)
         button_layout.addWidget(self.pause_btn)
@@ -153,40 +180,41 @@ class AudioEditorWindow(QMainWindow):
         button_layout.addWidget(self.repeat_btn)
         button_layout.addStretch()
 
-        # Waveform widget
         self.waveform = WaveformWidget()
 
-        # Add to main layout
         main_layout.addLayout(button_layout)
         main_layout.addWidget(self.waveform)
 
-        # Keyboard shortcuts
         self.setup_shortcuts()
 
     def setup_shortcuts(self):
-        # Zoom shortcuts - Fixed to handle + key properly
+        """Configure keyboard shortcuts for common operations."""
         zoom_in = QShortcut(QKeySequence('Ctrl+='), self)
         zoom_in.activated.connect(self.waveform.zoom_in)
 
-        # Also support Ctrl+Plus for zoom in
+        # also support actual Ctrl+Plus for zoom in
         zoom_in_plus = QShortcut(QKeySequence.StandardKey.ZoomIn, self)
         zoom_in_plus.activated.connect(self.waveform.zoom_in)
 
         zoom_out = QShortcut(QKeySequence('Ctrl+-'), self)
         zoom_out.activated.connect(self.waveform.zoom_out)
 
-        # Delete shortcuts
         delete = QShortcut(QKeySequence(Qt.Key.Key_Delete), self)
         delete.activated.connect(self.delete_region)
 
         backspace = QShortcut(QKeySequence(Qt.Key.Key_Backspace), self)
         backspace.activated.connect(self.delete_region)
 
-        # Playback shortcuts
         space = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
         space.activated.connect(self.toggle_playback)
 
     def import_file(self):
+        """
+        Open file dialog and import an audio file.
+
+        Resets zoom and view to show the entire imported file.
+        Displays error message if import fails.
+        """
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Import Audio File",
@@ -198,18 +226,24 @@ class AudioEditorWindow(QMainWindow):
             try:
                 self.engine.load_file(file_path)
 
-                # Reset zoom and view
+                # reset zoom and view
                 self.waveform.zoom_level = 1.0
                 self.waveform.view_start_time = 0.0
                 self.waveform.view_end_time = self.engine.get_duration()
 
-                # Update waveform display
+                # update waveform display
                 self.update_waveform()
                 self.statusBar().showMessage(f'Loaded: {file_path}')
             except Exception as e:
                 QMessageBox.critical(self, 'Error', f'Failed to load file: {str(e)}')
 
     def update_waveform(self):
+        """
+        Request waveform data from engine and update display.
+
+        Automatically adjusts resolution based on zoom level and
+        visible time range. Handles both mono and stereo audio.
+        """
         try:
             if not hasattr(self, 'engine'):
                 return
@@ -218,13 +252,11 @@ class AudioEditorWindow(QMainWindow):
             if duration == 0:
                 return
 
-            # Get channel count
             try:
                 channels = self.engine.get_channels()
             except:
-                channels = 2  # Default to stereo if method doesn't exist
+                channels = 2
 
-            # Use the new Rust method for visible range
             width = self.waveform.width()
             if width <= 0:
                 return
@@ -240,73 +272,88 @@ class AudioEditorWindow(QMainWindow):
             print(f"Error updating waveform: {e}")
 
     def play(self):
+        """
+        Start or resume audio playback.
+
+        If a region is selected, plays only that region. Resumes from
+        current position if paused within a selection, otherwise restarts
+        from the beginning of the selection or file.
+        """
         try:
             selection = self.waveform.get_selection()
             current_pos = self.engine.get_playback_position()
 
             if selection:
                 start, end = selection
-                # Only restart from beginning of selection if we're outside the selection
-                # or at the end of the selection
+                # restart if outside selection or at end
                 if current_pos < start or current_pos >= end:
                     self.engine.stop()
                     self.engine.play(start, end)
                 else:
-                    # Resume from current position within selection
+                    # resume from current position within selection
                     self.engine.play(None, None)
             else:
-                # Resume from current position or start from beginning
                 if current_pos > 0 and current_pos < self.engine.get_duration():
-                    # Resume from current position
+                    # resume from current position
                     self.engine.play(None, None)
                 else:
-                    # Start from beginning
+                    # start from beginning
                     self.engine.stop()
                     self.engine.play(None, None)
         except Exception as e:
             QMessageBox.critical(self, 'Error', f'Playback error: {str(e)}')
 
     def pause(self):
+        """Pause audio playback without resetting position."""
         self.engine.pause()
 
     def rewind(self):
+        """Stop playback and return to the beginning."""
         self.engine.stop()
         self.waveform.clear_playback_position()
 
     def skip_to_end(self):
+        """Stop playback and move cursor to the end of the audio."""
         try:
-            # Stop playback first
+            # stop playback first
             self.engine.stop()
-            # Set cursor to end
+            # set cursor to end
             duration = self.engine.get_duration()
             self.waveform.set_playback_position(duration)
         except Exception as e:
             print(f"Error skipping: {e}")
 
     def toggle_repeat(self):
+        """Toggle repeat mode for continuous playback."""
         self.is_repeating = self.repeat_btn.isChecked()
         status = "On" if self.is_repeating else "Off"
         self.repeat_btn.setText(f'🔁 Repeat: {status}')
 
     def toggle_playback(self):
+        """
+        Toggle between play and pause states.
+
+        Intelligently handles restarting from beginning if at the end
+        of a selection or file.
+        """
         try:
             if self.engine.is_playing():
                 self.pause()
             else:
-                # When resuming, check if we need to restart
+                # when resuming, check if we need to restart
                 position = self.engine.get_playback_position()
                 selection = self.waveform.get_selection()
 
                 if selection:
                     start, end = selection
-                    # If we're at the end of selection, restart from beginning
+                    # if we're at the end of selection, restart from beginning
                     if position >= end:
                         self.engine.stop()
                         self.engine.play(start, end)
                     else:
                         self.play()
                 else:
-                    # If we're at the end of file, restart from beginning
+                    # if we're at the end of file, restart from beginning
                     duration = self.engine.get_duration()
                     if position >= duration:
                         self.engine.stop()
@@ -317,12 +364,18 @@ class AudioEditorWindow(QMainWindow):
             print(f"Error toggling playback: {e}")
 
     def check_playback(self):
+        """
+        Update playback position and handle repeat mode.
+
+        Called periodically by timer to update UI and detect when
+        playback reaches the end of a selection or file.
+        """
         try:
             if self.engine.is_playing():
                 position = self.engine.get_playback_position()
                 self.waveform.set_playback_position(position)
 
-                # Check if we've reached the end of selection/file
+                # check if we've reached the end of selection/file
                 selection = self.waveform.get_selection()
                 duration = self.engine.get_duration()
 
@@ -332,19 +385,18 @@ class AudioEditorWindow(QMainWindow):
                 if selection:
                     start, end = selection
                     end_position = end
-                    if position >= end - 0.05:  # Small buffer before the end
+                    if position >= end - 0.05:
                         should_repeat = self.is_repeating
                         if not self.is_repeating:
                             self.engine.stop()
                             self.waveform.set_playback_position(end)
                 else:
-                    if position >= duration - 0.05:  # Small buffer before the end
+                    if position >= duration - 0.05:
                         should_repeat = self.is_repeating
                         if not self.is_repeating:
                             self.engine.stop()
                             self.waveform.set_playback_position(duration)
 
-                # Handle repeat
                 if should_repeat:
                     self.engine.stop()
                     if selection:
@@ -359,6 +411,12 @@ class AudioEditorWindow(QMainWindow):
             print(f"Error checking playback: {e}")
 
     def delete_region(self):
+        """
+        Delete the currently selected audio region.
+
+        Positions the playback cursor at the start of the deleted region
+        and updates the waveform display.
+        """
         selection = self.waveform.get_selection()
         if selection:
             try:
@@ -366,7 +424,7 @@ class AudioEditorWindow(QMainWindow):
                 self.engine.delete_region(start, end)
                 self.waveform.clear_selection()
 
-                # Set playback position to where deleted region started
+                # set playback position to where deleted region started
                 self.engine.set_playback_position(start)
                 self.waveform.set_playback_position(start)
 
@@ -376,22 +434,35 @@ class AudioEditorWindow(QMainWindow):
                 QMessageBox.critical(self, 'Error', f'Delete error: {str(e)}')
 
     def export_file(self, file_type='wav'):
+        """
+        Export audio to a file with optional format-specific settings.
+
+        Parameters
+        ----------
+        file_type : str
+            output format ('wav', 'flac', or 'mp3')
+
+        Notes
+        -----
+        Shows a dialog for FLAC/MP3 options before the save dialog.
+        Exports the selection if one exists, otherwise exports entire file.
+        """
         try:
             compression_level = None
             bitrate = None
 
-            # Show options dialog first for FLAC and MP3
+            # show options dialog first for FLAC and MP3
             if file_type in ['flac', 'mp3']:
                 dialog = ExportDialog(self, file_type)
                 if dialog.exec() != QDialog.DialogCode.Accepted:
-                    return  # User cancelled
+                    return
 
                 if file_type == 'flac':
                     compression_level = dialog.get_compression_level()
                 elif file_type == 'mp3':
                     bitrate = dialog.get_bitrate()
 
-            # Then show file save dialog
+            # then show file save dialog
             filter_map = {
                 'wav': "WAV Files (*.wav)",
                 'flac': "FLAC Files (*.flac)",
@@ -408,7 +479,7 @@ class AudioEditorWindow(QMainWindow):
             if not file_path:
                 return
 
-            # Add extension if not present
+            # add extension if not present
             if not file_path.lower().endswith(f'.{file_type}'):
                 file_path += f'.{file_type}'
 
@@ -418,7 +489,7 @@ class AudioEditorWindow(QMainWindow):
                 self.engine.export_audio(file_path, start, end, compression_level, bitrate)
                 self.statusBar().showMessage(f'Exported selection: {file_path}')
             else:
-                # Export entire file when no selection
+                # export entire file when no selection
                 self.engine.export_audio(file_path, 0.0, self.engine.get_duration(),
                                          compression_level, bitrate)
                 self.statusBar().showMessage(f'Exported entire file: {file_path}')
@@ -427,12 +498,25 @@ class AudioEditorWindow(QMainWindow):
             QMessageBox.critical(self, 'Error', f'Export error: {str(e)}')
 
     def resizeEvent(self, event):
+        """
+        Handle window resize events.
+
+        Parameters
+        ----------
+        event : QResizeEvent
+            resize event details
+
+        Notes
+        -----
+        Triggers waveform update to adjust resolution for new window size.
+        """
         super().resizeEvent(event)
         if hasattr(self, 'engine'):
             self.update_waveform()
 
 
 def main():
+    """Application entry point."""
     app = QApplication(sys.argv)
     window = AudioEditorWindow()
     window.show()

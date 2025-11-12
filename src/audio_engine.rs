@@ -9,6 +9,7 @@ use std::path::Path;
 use std::io::Write;
 use crate::playback::AudioPlayback;
 
+/// Core audio engine for loading, processing, and exporting audio
 pub struct AudioEngine
 {
     audio_data: Vec<f32>,
@@ -19,6 +20,7 @@ pub struct AudioEngine
 
 impl AudioEngine
 {
+    /// Create a new audio engine instance
     pub fn new() -> Self
     {
         AudioEngine
@@ -30,6 +32,16 @@ impl AudioEngine
         }
     }
 
+    /// Load and decode an audio file
+    ///
+    /// # Parameters
+    /// * `path` - filesystem path to audio file
+    ///
+    /// # Returns
+    /// `Result<(), String>` - Ok if successful, Err with message otherwise
+    ///
+    /// # Notes
+    /// Automatically converts mono to stereo for consistent processing
     pub fn load_file(&mut self, path: &str) -> Result<(), String>
     {
         let file = File::open(path).map_err(|e| e.to_string())?;
@@ -75,14 +87,14 @@ impl AudioEngine
             match decoder.decode(&packet)
             {
                 Ok(audio_buf) =>
-                    {
-                        self.append_audio_buffer(audio_buf);
-                    }
+                {
+                    self.append_audio_buffer(audio_buf);
+                }
                 Err(_) => continue,
             }
         }
 
-        // Ensure we have stereo data (convert mono to stereo if needed)
+        // convert mono to stereo
         if self.channels == 1
         {
             let mut stereo_data = Vec::with_capacity(self.audio_data.len() * 2);
@@ -98,44 +110,58 @@ impl AudioEngine
         Ok(())
     }
 
+    /// Append decoded audio buffer to internal storage
+    ///
+    /// # Parameters
+    /// * `audio_buf` - decoded audio buffer from symphonia
+    ///
+    /// # Notes
+    /// Handles F32, S32, and S16 sample formats, converting to F32
     fn append_audio_buffer(&mut self, audio_buf: AudioBufferRef)
     {
         match audio_buf
         {
             AudioBufferRef::F32(buf) =>
+            {
+                for frame in 0..buf.frames()
                 {
-                    for frame in 0..buf.frames()
+                    for ch in 0..buf.spec().channels.count()
                     {
-                        for ch in 0..buf.spec().channels.count()
-                        {
-                            self.audio_data.push(buf.chan(ch)[frame]);
-                        }
+                        self.audio_data.push(buf.chan(ch)[frame]);
                     }
                 }
+            }
             AudioBufferRef::S32(buf) =>
+            {
+                for frame in 0..buf.frames()
                 {
-                    for frame in 0..buf.frames()
+                    for ch in 0..buf.spec().channels.count()
                     {
-                        for ch in 0..buf.spec().channels.count()
-                        {
-                            self.audio_data.push(buf.chan(ch)[frame] as f32 / i32::MAX as f32);
-                        }
+                        self.audio_data.push(buf.chan(ch)[frame] as f32 / i32::MAX as f32);
                     }
                 }
+            }
             AudioBufferRef::S16(buf) =>
+            {
+                for frame in 0..buf.frames()
                 {
-                    for frame in 0..buf.frames()
+                    for ch in 0..buf.spec().channels.count()
                     {
-                        for ch in 0..buf.spec().channels.count()
-                        {
-                            self.audio_data.push(buf.chan(ch)[frame] as f32 / i16::MAX as f32);
-                        }
+                        self.audio_data.push(buf.chan(ch)[frame] as f32 / i16::MAX as f32);
                     }
                 }
+            }
             _ => {}
         }
     }
 
+    /// Get downsampled waveform data for display (legacy method)
+    ///
+    /// # Parameters
+    /// * `samples_per_pixel` - number of audio samples per display pixel
+    ///
+    /// # Returns
+    /// `Vec<(f32, f32)>` - min/max pairs for averaged channels
     pub fn get_waveform_data(&self, samples_per_pixel: usize) -> Vec<(f32, f32)>
     {
         if self.audio_data.is_empty()
@@ -149,8 +175,6 @@ impl AudioEngine
 
         if self.channels == 2
         {
-            // Return stereo waveform data (min_L, max_L, min_R, max_R)
-            // We'll encode it as two tuples per pixel for Python
             for i in 0..pixel_count
             {
                 let start = i * samples_per_pixel;
@@ -176,41 +200,7 @@ impl AudioEngine
                     }
                 }
 
-                // For stereo, we'll return a tuple of 4 values encoded as 2 tuples
-                // Python will check the length to determine if it's stereo
-                waveform.push((min_l, max_l));
-                waveform.push((min_r, max_r));
-            }
-
-            // Actually, let's use a different approach - return proper stereo data
-            // Clear and rebuild with proper format
-            waveform.clear();
-            for i in 0..pixel_count
-            {
-                let start = i * samples_per_pixel;
-                let end = ((i + 1) * samples_per_pixel).min(frame_count);
-
-                let mut min_l = 0.0f32;
-                let mut max_l = 0.0f32;
-                let mut min_r = 0.0f32;
-                let mut max_r = 0.0f32;
-
-                for j in start..end
-                {
-                    let idx = j * 2;
-                    if idx + 1 < self.audio_data.len()
-                    {
-                        let left = self.audio_data[idx];
-                        let right = self.audio_data[idx + 1];
-
-                        min_l = min_l.min(left);
-                        max_l = max_l.max(left);
-                        min_r = min_r.min(right);
-                        max_r = max_r.max(right);
-                    }
-                }
-
-                // Use average for now (will fix Python to handle stereo properly)
+                // average channels for mono display
                 let min_avg = (min_l + min_r) / 2.0;
                 let max_avg = (max_l + max_r) / 2.0;
                 waveform.push((min_avg, max_avg));
@@ -218,7 +208,7 @@ impl AudioEngine
         }
         else
         {
-            // Mono or averaged display
+            // mono or averaged display
             for i in 0..pixel_count
             {
                 let start = i * samples_per_pixel * self.channels;
@@ -229,7 +219,7 @@ impl AudioEngine
 
                 for j in (start..end).step_by(self.channels)
                 {
-                    // Average the channels for display
+                    // average the channels for display
                     let mut sample = 0.0;
                     for ch in 0..self.channels
                     {
@@ -251,11 +241,19 @@ impl AudioEngine
         waveform
     }
 
+    /// Get sample rate of loaded audio
+    ///
+    /// # Returns
+    /// `u32` - sample rate in Hz
     pub fn get_sample_rate(&self) -> u32
     {
         self.sample_rate
     }
 
+    /// Get duration of loaded audio
+    ///
+    /// # Returns
+    /// `f64` - duration in seconds
     pub fn get_duration(&self) -> f64
     {
         if self.audio_data.is_empty()
@@ -265,11 +263,25 @@ impl AudioEngine
         (self.audio_data.len() / self.channels) as f64 / self.sample_rate as f64
     }
 
+    /// Get number of audio channels
+    ///
+    /// # Returns
+    /// `usize` - number of channels
     pub fn get_channels(&self) -> usize
     {
         self.channels
     }
 
+    /// Get stereo waveform data for display
+    ///
+    /// # Parameters
+    /// * `samples_per_pixel` - number of audio samples per display pixel
+    ///
+    /// # Returns
+    /// `Vec<(f32, f32, f32, f32)>` - (min_l, max_l, min_r, max_r) tuples
+    ///
+    /// # Notes
+    /// Duplicates mono channel to maintain consistent tuple format
     pub fn get_stereo_waveform_data(&self, samples_per_pixel: usize) -> Vec<(f32, f32, f32, f32)>
     {
         if self.audio_data.is_empty()
@@ -283,7 +295,7 @@ impl AudioEngine
 
         if self.channels == 2
         {
-            // Return stereo waveform data (min_L, max_L, min_R, max_R)
+            // return stereo waveform data (min_L, max_L, min_R, max_R)
             for i in 0..pixel_count
             {
                 let start = i * samples_per_pixel;
@@ -314,7 +326,7 @@ impl AudioEngine
         }
         else
         {
-            // For mono, duplicate the channel
+            // for mono, duplicate the channel
             for i in 0..pixel_count
             {
                 let start = i * samples_per_pixel * self.channels;
@@ -340,6 +352,19 @@ impl AudioEngine
         waveform
     }
 
+    /// Get waveform data for a specific time range
+    ///
+    /// # Parameters
+    /// * `start_time` - start of range in seconds
+    /// * `end_time` - end of range in seconds
+    /// * `num_pixels` - desired number of display pixels
+    ///
+    /// # Returns
+    /// `Vec<(f32, f32, f32, f32)>` - waveform data optimized for the range
+    ///
+    /// # Notes
+    /// When zoomed in to less than 1 sample per pixel, returns individual
+    /// sample values instead of downsampled min/max ranges
     pub fn get_waveform_for_range(&self, start_time: f64, end_time: f64, num_pixels: usize) -> Vec<(f32, f32, f32, f32)>
     {
         if self.audio_data.is_empty() || num_pixels == 0
@@ -358,11 +383,10 @@ impl AudioEngine
         let frame_count = end_frame - start_frame;
         let samples_per_pixel = (frame_count as f64) / (num_pixels as f64);
 
-        // When zoomed in enough to see individual samples (< 1 sample per pixel),
-        // return one data point per sample instead of one per pixel
+        // individual sample mode when zoomed in far enough
         if samples_per_pixel < 1.0
         {
-            // Return individual samples
+            // return individual samples
             let mut waveform = Vec::with_capacity(frame_count);
 
             for frame in start_frame..end_frame
@@ -374,7 +398,7 @@ impl AudioEngine
                     {
                         let left = self.audio_data[idx];
                         let right = self.audio_data[idx + 1];
-                        // For individual samples, min and max are the same value
+                        // for individual samples, min and max are the same value
                         waveform.push((left, left, right, right));
                     }
                 }
@@ -384,7 +408,7 @@ impl AudioEngine
                     if idx < self.audio_data.len()
                     {
                         let sample = self.audio_data[idx];
-                        // For mono, duplicate the values
+                        // for mono, duplicate the values
                         waveform.push((sample, sample, sample, sample));
                     }
                 }
@@ -393,7 +417,7 @@ impl AudioEngine
             return waveform;
         }
 
-        // Normal case: downsample to one data point per pixel
+        // downsampled mode for normal zoom levels
         let mut waveform = Vec::with_capacity(num_pixels);
 
         for i in 0..num_pixels
@@ -409,7 +433,7 @@ impl AudioEngine
 
             if self.channels == 2
             {
-                // Stereo - separate left and right channels
+                // stereo - separate left and right channels
                 let mut min_l = 0.0f32;
                 let mut max_l = 0.0f32;
                 let mut min_r = 0.0f32;
@@ -434,7 +458,7 @@ impl AudioEngine
             }
             else
             {
-                // Mono - single channel
+                // mono - single channel
                 let mut min_val = 0.0f32;
                 let mut max_val = 0.0f32;
 
@@ -449,7 +473,7 @@ impl AudioEngine
                     }
                 }
 
-                // For mono, duplicate the values to maintain consistent tuple size
+                // for mono, duplicate the values to maintain consistent tuple size
                 waveform.push((min_val, max_val, min_val, max_val));
             }
         }
@@ -457,9 +481,20 @@ impl AudioEngine
         waveform
     }
 
+    /// Start audio playback
+    ///
+    /// # Parameters
+    /// * `start_time` - optional start time in seconds
+    /// * `end_time` - optional end time in seconds
+    ///
+    /// # Returns
+    /// `Result<(), String>` - Ok if successful
+    ///
+    /// # Notes
+    /// If both times are None and playback is paused, resumes from current position
     pub fn play(&mut self, start_time: Option<f64>, end_time: Option<f64>) -> Result<(), String>
     {
-        // If both start and end are None and we have paused playback, resume
+        // resume paused playback if no times specified
         if start_time.is_none() && end_time.is_none()
         {
             if let Some(ref mut playback) = self.playback
@@ -472,7 +507,7 @@ impl AudioEngine
             }
         }
 
-        // Otherwise start new playback
+        // otherwise start new playback
         let start_frame = start_time.map(|t| (t * self.sample_rate as f64) as usize).unwrap_or(0);
         let end_frame = end_time
             .map(|t| (t * self.sample_rate as f64) as usize)
@@ -496,6 +531,7 @@ impl AudioEngine
         Ok(())
     }
 
+    /// Pause audio playback
     pub fn pause(&mut self)
     {
         if let Some(ref mut playback) = self.playback
@@ -504,6 +540,7 @@ impl AudioEngine
         }
     }
 
+    /// Stop audio playback and reset position
     pub fn stop(&mut self)
     {
         if let Some(ref mut playback) = self.playback
@@ -512,11 +549,19 @@ impl AudioEngine
         }
     }
 
+    /// Check if audio is currently playing
+    ///
+    /// # Returns
+    /// `bool` - true if playing
     pub fn is_playing(&self) -> bool
     {
         self.playback.as_ref().map(|p| p.is_playing()).unwrap_or(false)
     }
 
+    /// Get current playback position
+    ///
+    /// # Returns
+    /// `f64` - position in seconds
     pub fn get_playback_position(&self) -> f64
     {
         self.playback
@@ -525,6 +570,10 @@ impl AudioEngine
             .unwrap_or(0.0)
     }
 
+    /// Set playback position
+    ///
+    /// # Parameters
+    /// * `position` - new position in seconds
     pub fn set_playback_position(&mut self, position: f64)
     {
         if let Some(ref mut playback) = self.playback
@@ -533,6 +582,17 @@ impl AudioEngine
         }
     }
 
+    /// Delete a region of audio
+    ///
+    /// # Parameters
+    /// * `start_time` - start of region in seconds
+    /// * `end_time` - end of region in seconds
+    ///
+    /// # Returns
+    /// `Result<(), String>` - Ok if successful
+    ///
+    /// # Errors
+    /// Returns error if start position is out of bounds
     pub fn delete_region(&mut self, start_time: f64, end_time: f64) -> Result<(), String>
     {
         let start_frame = (start_time * self.sample_rate as f64) as usize;
@@ -552,6 +612,20 @@ impl AudioEngine
         Ok(())
     }
 
+    /// Export audio to a file
+    ///
+    /// # Parameters
+    /// * `path` - output file path with extension
+    /// * `start_time` - optional start time in seconds
+    /// * `end_time` - optional end time in seconds
+    /// * `compression_level` - optional FLAC compression level 0-8
+    /// * `bitrate_kbps` - optional MP3 bitrate in kbps
+    ///
+    /// # Returns
+    /// `Result<(), String>` - Ok if successful
+    ///
+    /// # Notes
+    /// Format is determined by file extension (.wav, .flac, or .mp3)
     pub fn export_audio(&self, path: &str, start_time: Option<f64>, end_time: Option<f64>,
                         compression_level: Option<u8>, bitrate_kbps: Option<u32>) -> Result<(), String>
     {
@@ -586,6 +660,17 @@ impl AudioEngine
         Ok(())
     }
 
+    /// Export audio as WAV file
+    ///
+    /// # Parameters
+    /// * `path` - output file path
+    /// * `data` - audio sample data
+    ///
+    /// # Returns
+    /// `Result<(), String>` - Ok if successful
+    ///
+    /// # Notes
+    /// Exports as 16-bit PCM WAV
     fn export_wav(&self, path: &str, data: &[f32]) -> Result<(), String>
     {
         let spec = hound::WavSpec
@@ -612,11 +697,20 @@ impl AudioEngine
         Ok(())
     }
 
+    /// Export audio as FLAC file
+    ///
+    /// # Parameters
+    /// * `path` - output file path
+    /// * `data` - audio sample data
+    /// * `compression_level` - compression level 0-8
+    ///
+    /// # Returns
+    /// `Result<(), String>` - Ok if successful
     fn export_flac(&self, path: &str, data: &[f32], compression_level: u8) -> Result<(), String>
     {
         use std::path::Path;
 
-        // Use the custom FLAC encoder
+        // use the custom FLAC encoder
         crate::flac::export_to_flac_with_level(
             Path::new(path),
             data,
@@ -629,12 +723,24 @@ impl AudioEngine
         Ok(())
     }
 
+    /// Export audio as MP3 file
+    ///
+    /// # Parameters
+    /// * `path` - output file path
+    /// * `data` - audio sample data
+    /// * `bitrate_kbps` - bitrate in kbps (128, 160, 192, 256, or 320)
+    ///
+    /// # Returns
+    /// `Result<(), String>` - Ok if successful
+    ///
+    /// # Notes
+    /// Uses LAME encoder with good quality preset
     fn export_mp3(&self, path: &str, data: &[f32], bitrate_kbps: u32) -> Result<(), String>
     {
         use mp3lame_encoder::{Builder, InterleavedPcm, FlushNoGap, Bitrate};
         use std::mem::MaybeUninit;
 
-        // Convert to stereo interleaved i16 samples
+        // convert to i16 samples
         let mut samples_i16 = Vec::with_capacity(data.len());
         for &sample in data
         {
@@ -642,7 +748,6 @@ impl AudioEngine
             samples_i16.push(sample_i16);
         }
 
-        // Setup MP3 encoder
         let mut mp3_encoder = Builder::new()
             .ok_or("Failed to create MP3 encoder")?;
 
@@ -652,7 +757,6 @@ impl AudioEngine
         mp3_encoder.set_num_channels(self.channels as u8)
                    .map_err(|e| format!("Failed to set channels: {:?}", e))?;
 
-        // Set bitrate based on parameter
         let bitrate = match bitrate_kbps
         {
             128 => Bitrate::Kbps128,
@@ -660,7 +764,7 @@ impl AudioEngine
             192 => Bitrate::Kbps192,
             256 => Bitrate::Kbps256,
             320 => Bitrate::Kbps320,
-            _ => Bitrate::Kbps192,  // Default to 192
+            _ => Bitrate::Kbps192,
         };
 
         mp3_encoder.set_brate(bitrate)
@@ -672,31 +776,30 @@ impl AudioEngine
         let mut mp3_encoder = mp3_encoder.build()
                                          .map_err(|e| format!("Failed to build encoder: {:?}", e))?;
 
-        // Encode
+        // encode
         let input = InterleavedPcm(&samples_i16);
         let mut mp3_out = Vec::new();
 
-        // Calculate proper buffer size: 1.25 * num_samples + 7200
+        // calculate proper buffer size: 1.25 * num_samples + 7200
         let buffer_size = (samples_i16.len() * 5 / 4 + 7200).max(16384);
         let mut output: Vec<MaybeUninit<u8>> = vec![MaybeUninit::uninit(); buffer_size];
 
         let encoded_size = mp3_encoder.encode(input, &mut output[..])
                                       .map_err(|e| format!("Failed to encode MP3: {:?}", e))?;
 
-        // Safely convert MaybeUninit to initialized bytes
+        // safely convert MaybeUninit to initialized bytes
         for i in 0..encoded_size
         {
             unsafe
-                {
-                    mp3_out.push(output[i].assume_init());
-                }
+            {
+                mp3_out.push(output[i].assume_init());
+            }
         }
 
-        // Flush remaining data
         let _flushed_size = mp3_encoder.flush_to_vec::<FlushNoGap>(&mut mp3_out)
                                        .map_err(|e| format!("Failed to flush MP3: {:?}", e))?;
 
-        // Write to file
+        // write to file
         let mut file = File::create(path)
             .map_err(|e| format!("Failed to create MP3 file: {}", e))?;
         file.write_all(&mp3_out)
