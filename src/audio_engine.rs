@@ -356,8 +356,44 @@ impl AudioEngine
         }
 
         let frame_count = end_frame - start_frame;
-        let samples_per_pixel = ((frame_count as f64) / (num_pixels as f64)).max(1.0);
+        let samples_per_pixel = (frame_count as f64) / (num_pixels as f64);
 
+        // When zoomed in enough to see individual samples (< 1 sample per pixel),
+        // return one data point per sample instead of one per pixel
+        if samples_per_pixel < 1.0
+        {
+            // Return individual samples
+            let mut waveform = Vec::with_capacity(frame_count);
+
+            for frame in start_frame..end_frame
+            {
+                if self.channels == 2
+                {
+                    let idx = frame * 2;
+                    if idx + 1 < self.audio_data.len()
+                    {
+                        let left = self.audio_data[idx];
+                        let right = self.audio_data[idx + 1];
+                        // For individual samples, min and max are the same value
+                        waveform.push((left, left, right, right));
+                    }
+                }
+                else
+                {
+                    let idx = frame * self.channels;
+                    if idx < self.audio_data.len()
+                    {
+                        let sample = self.audio_data[idx];
+                        // For mono, duplicate the values
+                        waveform.push((sample, sample, sample, sample));
+                    }
+                }
+            }
+
+            return waveform;
+        }
+
+        // Normal case: downsample to one data point per pixel
         let mut waveform = Vec::with_capacity(num_pixels);
 
         for i in 0..num_pixels
@@ -420,6 +456,7 @@ impl AudioEngine
 
         waveform
     }
+
     pub fn play(&mut self, start_time: Option<f64>, end_time: Option<f64>) -> Result<(), String>
     {
         // If both start and end are None and we have paused playback, resume

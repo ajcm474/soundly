@@ -120,20 +120,11 @@ class WaveformWidget(QWidget):
                 painter.fillRect(QRectF(start_x, 0, end_x - start_x, waveform_height),
                                  QColor(100, 150, 255, 80))
 
-        # Calculate which samples to draw
+        # Draw waveform
         total_samples = len(self.waveform_data)
-
-        start_fraction = self.view_start_time / self.duration if self.duration > 0 else 0
-        end_fraction = self.view_end_time / self.duration if self.duration > 0 else 1
-
-        start_sample = int(start_fraction * total_samples)
-        end_sample = min(int(end_fraction * total_samples) + 1, total_samples)
-
-        if start_sample >= end_sample:
-            painter.restore()  # Restore before returning
+        if total_samples == 0:
+            painter.restore()
             return
-
-        samples_to_draw = end_sample - start_sample
 
         if self.is_stereo and self.channels == 2:
             # Draw stereo waveform
@@ -153,16 +144,21 @@ class WaveformWidget(QWidget):
             # Draw waveforms
             painter.setPen(QPen(QColor(100, 200, 255), 1))
 
-            for i in range(samples_to_draw):
-                sample_idx = start_sample + i
-                if sample_idx >= len(self.waveform_data):
+            for i in range(total_samples):
+                if i >= len(self.waveform_data):
                     break
 
-                # Map sample position to x coordinate
-                x = (i / samples_to_draw) * width
+                # When zoomed in to individual samples, we have more data points than pixels
+                # Map sample position to x coordinate based on the number of samples
+                if total_samples > width:
+                    # Individual sample mode: map samples across the width
+                    x = (i / total_samples) * width
+                else:
+                    # Normal mode: one data point per pixel
+                    x = (i / total_samples) * width
 
                 # Get stereo data
-                min_l, max_l, min_r, max_r = self.waveform_data[sample_idx]
+                min_l, max_l, min_r, max_r = self.waveform_data[i]
 
                 # Left channel
                 y_min_l = (channel_height / 2) - (min_l * channel_height * 0.45)
@@ -184,16 +180,20 @@ class WaveformWidget(QWidget):
             # Draw waveform
             painter.setPen(QPen(QColor(100, 200, 255), 1))
 
-            for i in range(samples_to_draw):
-                sample_idx = start_sample + i
-                if sample_idx >= len(self.waveform_data):
+            for i in range(total_samples):
+                if i >= len(self.waveform_data):
                     break
 
                 # Map sample position to x coordinate
-                x = (i / samples_to_draw) * width
+                if total_samples > width:
+                    # Individual sample mode: map samples across the width
+                    x = (i / total_samples) * width
+                else:
+                    # Normal mode: one data point per pixel
+                    x = (i / total_samples) * width
 
                 # Get mono data (from first two values)
-                min_val, max_val = self.waveform_data[sample_idx][:2]
+                min_val, max_val = self.waveform_data[i][:2]
 
                 y_min = center_y - (min_val * center_y * 0.9)
                 y_max = center_y - (max_val * center_y * 0.9)
