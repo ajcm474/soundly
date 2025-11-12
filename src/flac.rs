@@ -152,7 +152,7 @@ impl MD5Context
         let part_len = 64 - index;
 
         // transform as many times as possible
-        let mut i = if len >= part_len
+        if len >= part_len
         {
             self.buffer[index..index + part_len].copy_from_slice(&data[0..part_len]);
             self.transform(&self.buffer.clone());
@@ -166,12 +166,7 @@ impl MD5Context
                 i += 64;
             }
             input_index = i;
-            0
         }
-        else
-        {
-            0
-        };
 
         // buffer remaining input
         if input_index < len
@@ -385,15 +380,13 @@ impl MD5Context
 ///
 /// # Parameters
 /// * `samples` - audio samples as i16 values
-/// * `channels` - number of audio channels
-/// * `bits_per_sample` - bits per sample (currently unused, for future expansion)
 ///
 /// # Returns
 /// `[u8; 16]` - MD5 digest of audio data
 ///
 /// # Notes
 /// Samples are processed in little-endian byte order as required by FLAC spec
-fn compute_md5(samples: &[i16], channels: u16, bits_per_sample: u8) -> [u8; 16]
+fn compute_md5(samples: &[i16]) -> [u8; 16]
 {
     let mut ctx = MD5Context::new();
 
@@ -1259,7 +1252,7 @@ pub fn encode_flac_with_level(
     writer.write_bytes(&FLAC_SIGNATURE);
 
     // calculate MD5 checksum of audio data
-    let md5 = compute_md5(&i16_samples, channels, bits_per_sample);
+    let md5 = compute_md5(&i16_samples);
 
     // write streaminfo
     write_streaminfo(
@@ -1309,24 +1302,6 @@ pub fn encode_flac_with_level(
     Ok(writer.get_bytes())
 }
 
-/// Main FLAC encoding function with default compression level 5
-///
-/// # Parameters
-/// * `samples` - audio samples as f32 values
-/// * `sample_rate` - sample rate in Hz
-/// * `channels` - number of channels
-///
-/// # Returns
-/// `Result<Vec<u8>>` - encoded FLAC data
-pub fn encode_flac(
-    samples: &[f32],
-    sample_rate: u32,
-    channels: u16,
-) -> Result<Vec<u8>>
-{
-    encode_flac_with_level(samples, sample_rate, channels, 5)
-}
-
 /// Export audio to FLAC file with specific compression level
 ///
 /// # Parameters
@@ -1350,24 +1325,4 @@ pub fn export_to_flac_with_level(
     let mut file = std::fs::File::create(path)?;
     file.write_all(&flac_data)?;
     Ok(())
-}
-
-/// Export audio to FLAC file with default compression level 5
-///
-/// # Parameters
-/// * `path` - output file path
-/// * `samples` - audio samples as f32 values
-/// * `sample_rate` - sample rate in Hz
-/// * `channels` - number of channels
-///
-/// # Returns
-/// `Result<()>` - Ok if successful
-pub fn export_to_flac(
-    path: &Path,
-    samples: &[f32],
-    sample_rate: u32,
-    channels: u16,
-) -> Result<()>
-{
-    export_to_flac_with_level(path, samples, sample_rate, channels, 5)
 }

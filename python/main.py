@@ -1,8 +1,7 @@
 import sys
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QFileDialog, QMessageBox,
-                             QDialog, QComboBox, QLabel, QDialogButtonBox,
-                             QMenu, QMenuBar)
+                             QDialog, QComboBox, QLabel, QDialogButtonBox)
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QKeySequence, QShortcut, QAction
 from waveform_widget import WaveformWidget
@@ -363,6 +362,32 @@ class AudioEditorWindow(QMainWindow):
         except Exception as e:
             print(f"Error toggling playback: {e}")
 
+    def _handle_playback_end(self, selection, position, end_position):
+        """
+        Handle playback reaching the end of selection or file.
+
+        Parameters
+        ----------
+        selection : tuple or None
+            current selection range
+        position : float
+            current playback position
+        end_position : float
+            end position (selection end or duration)
+
+        Returns
+        -------
+        bool
+            True if playback should repeat
+        """
+        if position >= end_position - 0.05:
+            if self.is_repeating:
+                return True
+            else:
+                self.engine.stop()
+                self.waveform.set_playback_position(end_position)
+        return False
+
     def check_playback(self):
         """
         Update playback position and handle repeat mode.
@@ -379,31 +404,17 @@ class AudioEditorWindow(QMainWindow):
                 selection = self.waveform.get_selection()
                 duration = self.engine.get_duration()
 
-                should_repeat = False
-                end_position = duration
-
                 if selection:
                     start, end = selection
-                    end_position = end
-                    if position >= end - 0.05:
-                        should_repeat = self.is_repeating
-                        if not self.is_repeating:
-                            self.engine.stop()
-                            self.waveform.set_playback_position(end)
-                else:
-                    if position >= duration - 0.05:
-                        should_repeat = self.is_repeating
-                        if not self.is_repeating:
-                            self.engine.stop()
-                            self.waveform.set_playback_position(duration)
-
-                if should_repeat:
-                    self.engine.stop()
-                    if selection:
-                        start, end = selection
+                    should_repeat = self._handle_playback_end(selection, position, end)
+                    if should_repeat:
+                        self.engine.stop()
                         self.engine.play(start, end)
                         self.waveform.set_playback_position(start)
-                    else:
+                else:
+                    should_repeat = self._handle_playback_end(None, position, duration)
+                    if should_repeat:
+                        self.engine.stop()
                         self.engine.play(None, None)
                         self.waveform.set_playback_position(0)
 

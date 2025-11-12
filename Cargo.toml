@@ -14,8 +14,6 @@ cpal = "0.15"
 hound = "3.5"
 mp3lame-encoder = "0.2"
 anyhow = "1.0"  # Required by custom FLAC implementation
-rubato = "0.14"
-crossbeam-channel = "0.5"
 
 [profile.release]
 opt-level = 3

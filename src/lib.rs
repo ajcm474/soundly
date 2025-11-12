@@ -47,18 +47,6 @@ impl AudioEditor
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to load file: {}", e)))
     }
 
-    /// Get waveform data downsampled for display
-    ///
-    /// # Parameters
-    /// * `samples_per_pixel` - number of audio samples to represent per pixel
-    ///
-    /// # Returns
-    /// `Vec<(f32, f32, f32, f32)>` - min/max pairs for left and right channels
-    fn get_waveform_data(&self, samples_per_pixel: usize) -> PyResult<Vec<(f32, f32, f32, f32)>>
-    {
-        Ok(self.engine.lock().unwrap().get_stereo_waveform_data(samples_per_pixel))
-    }
-
     /// Get waveform data for a specific time range
     ///
     /// # Parameters

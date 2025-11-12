@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import QWidget
 from PyQt6.QtCore import Qt, QRectF, QPointF
-from PyQt6.QtGui import QPainter, QColor, QPen, QBrush
+from PyQt6.QtGui import QPainter, QColor, QPen
 
 
 class WaveformWidget(QWidget):
@@ -281,16 +281,16 @@ class WaveformWidget(QWidget):
 
         # choose appropriate time interval
         intervals = [
-            (0.001, "%.3fs"),
-            (0.01, "%.2fs"),
-            (0.1, "%.1fs"),
-            (1.0, "%.0fs"),
-            (5.0, "%.0fs"),
-            (10.0, "%.0fs"),
-            (30.0, "%.0fs"),
-            (60.0, "%d:%02d"),
-            (300.0, "%d:%02d"),
-            (600.0, "%d:%02d"),
+            0.001,
+            0.01,
+            0.1,
+            1.0,
+            5.0,
+            10.0,
+            30.0,
+            60.0,
+            300.0,
+            600.0,
         ]
 
         # find appropriate interval (aim for 50-200 pixels between marks)
@@ -298,13 +298,11 @@ class WaveformWidget(QWidget):
         time_per_pixel = visible_duration / width
         ideal_interval = target_spacing * time_per_pixel
 
-        interval = intervals[0][0]
-        format_str = intervals[0][1]
+        interval = intervals[0]
 
-        for int_val, fmt in intervals:
+        for int_val in intervals:
             if int_val >= ideal_interval * 0.5:
                 interval = int_val
-                format_str = fmt
                 break
 
         # draw time marks
@@ -384,6 +382,60 @@ class WaveformWidget(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             self.is_selecting = False
 
+    def _get_max_zoom(self):
+        """
+        Calculate maximum zoom level based on sample rate.
+
+        Returns
+        -------
+        float
+            maximum zoom level to keep at least 100 samples visible
+        """
+        max_zoom = 10000.0
+        if hasattr(self.parent().parent(), 'engine'):
+            try:
+                sample_rate = self.parent().parent().engine.get_sample_rate()
+                duration = self.parent().parent().engine.get_duration()
+                total_samples = sample_rate * duration
+                max_zoom = total_samples / 100
+            except:
+                pass
+        return max_zoom
+
+    def _update_view_for_zoom(self, center_time, new_zoom):
+        """
+        Update view bounds after zoom change, centering on specified time.
+
+        Parameters
+        ----------
+        center_time : float
+            time in seconds to center the view on
+        new_zoom : float
+            new zoom level
+
+        Notes
+        -----
+        Requests waveform redraw from parent after updating bounds.
+        """
+        if self.duration <= 0:
+            return
+
+        visible_duration = self.duration / new_zoom
+
+        self.view_start_time = center_time - visible_duration / 2
+        self.view_start_time = max(0, self.view_start_time)
+        self.view_end_time = min(self.duration, self.view_start_time + visible_duration)
+
+        # adjust if we hit the end
+        if self.view_end_time >= self.duration:
+            self.view_end_time = self.duration
+            self.view_start_time = max(0, self.duration - visible_duration)
+
+        # request waveform redraw from parent
+        parent = self.parent()
+        if parent and hasattr(parent.parent(), 'update_waveform'):
+            parent.parent().update_waveform()
+
     def wheelEvent(self, event):
         """
         Handle mouse wheel for zooming.
@@ -400,17 +452,7 @@ class WaveformWidget(QWidget):
         individual samples.
         """
         mouse_time = self.x_to_time(event.position().x())
-
-        # calculate maximum zoom to keep at least 100 samples visible
-        max_zoom = 10000.0
-        if hasattr(self.parent().parent(), 'engine'):
-            try:
-                sample_rate = self.parent().parent().engine.get_sample_rate()
-                duration = self.parent().parent().engine.get_duration()
-                total_samples = sample_rate * duration
-                max_zoom = total_samples / 100
-            except:
-                pass
+        max_zoom = self._get_max_zoom()
 
         delta = event.angleDelta().y()
         if delta > 0:
@@ -576,23 +618,10 @@ class WaveformWidget(QWidget):
         selection if one exists, otherwise centers on current view.
         """
         old_zoom = self.zoom_level
-
-        # calculate maximum zoom based on keeping at least 100 samples visible
-        if hasattr(self.parent().parent(), 'engine'):
-            try:
-                sample_rate = self.parent().parent().engine.get_sample_rate()
-                duration = self.parent().parent().engine.get_duration()
-                total_samples = sample_rate * duration
-                max_zoom = total_samples / 100
-                self.zoom_level = min(max_zoom, self.zoom_level * 1.5)
-            except:
-                self.zoom_level = min(10000.0, self.zoom_level * 1.5)
-        else:
-            self.zoom_level = min(10000.0, self.zoom_level * 1.5)
+        max_zoom = self._get_max_zoom()
+        self.zoom_level = min(max_zoom, self.zoom_level * 1.5)
 
         if self.zoom_level != old_zoom and self.duration > 0:
-            visible_duration = self.duration / self.zoom_level
-
             selection = self.get_selection()
             if selection:
                 # center on selection
@@ -602,20 +631,7 @@ class WaveformWidget(QWidget):
                 # center on current view
                 center_time = (self.view_start_time + self.view_end_time) / 2
 
-            # calculate new view bounds centered on the target
-            self.view_start_time = center_time - visible_duration / 2
-            self.view_start_time = max(0, self.view_start_time)
-            self.view_end_time = min(self.duration, self.view_start_time + visible_duration)
-
-            # adjust if we hit the end
-            if self.view_end_time >= self.duration:
-                self.view_end_time = self.duration
-                self.view_start_time = max(0, self.duration - visible_duration)
-
-            # request waveform redraw from parent
-            parent = self.parent()
-            if parent and hasattr(parent.parent(), 'update_waveform'):
-                parent.parent().update_waveform()
+            self._update_view_for_zoom(center_time, self.zoom_level)
 
     def zoom_out(self):
         """
@@ -633,45 +649,11 @@ class WaveformWidget(QWidget):
                 # show entire waveform
                 self.view_start_time = 0.0
                 self.view_end_time = self.duration
+                # request waveform redraw from parent
+                parent = self.parent()
+                if parent and hasattr(parent.parent(), 'update_waveform'):
+                    parent.parent().update_waveform()
             else:
-                visible_duration = self.duration / self.zoom_level
-
                 # try to keep the current center
                 center_time = (self.view_start_time + self.view_end_time) / 2
-
-                self.view_start_time = center_time - visible_duration / 2
-                self.view_start_time = max(0, self.view_start_time)
-                self.view_end_time = min(self.duration, self.view_start_time + visible_duration)
-
-            # request waveform redraw from parent
-            parent = self.parent()
-            if parent and hasattr(parent.parent(), 'update_waveform'):
-                parent.parent().update_waveform()
-
-    def zoom_to_selection(self):
-        """
-        Zoom to fit current selection with 10% padding.
-
-        Notes
-        -----
-        Does nothing if no selection exists.
-        """
-        selection = self.get_selection()
-        if selection and self.duration > 0:
-            sel_start, sel_end = selection
-            selection_duration = sel_end - sel_start
-
-            # add 10% padding on each side
-            padding = selection_duration * 0.1
-            self.view_start_time = max(0, sel_start - padding)
-            self.view_end_time = min(self.duration, sel_end + padding)
-
-            # calculate zoom level from this
-            visible_duration = self.view_end_time - self.view_start_time
-            if visible_duration > 0:
-                self.zoom_level = self.duration / visible_duration
-
-            # request waveform redraw
-            parent = self.parent()
-            if parent and hasattr(parent.parent(), 'update_waveform'):
-                parent.parent().update_waveform()
+                self._update_view_for_zoom(center_time, self.zoom_level)
