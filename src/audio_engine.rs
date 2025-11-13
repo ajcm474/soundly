@@ -41,7 +41,7 @@ impl AudioEngine
     /// `Result<(), String>` - Ok if successful, Err with message otherwise
     ///
     /// # Notes
-    /// Automatically converts mono to stereo for consistent processing
+    /// Preserves original channel configuration (mono or stereo)
     pub fn load_file(&mut self, path: &str) -> Result<(), String>
     {
         let file = File::open(path).map_err(|e| e.to_string())?;
@@ -92,19 +92,6 @@ impl AudioEngine
                 }
                 Err(_) => continue,
             }
-        }
-
-        // convert mono to stereo
-        if self.channels == 1
-        {
-            let mut stereo_data = Vec::with_capacity(self.audio_data.len() * 2);
-            for sample in &self.audio_data
-            {
-                stereo_data.push(*sample);
-                stereo_data.push(*sample);
-            }
-            self.audio_data = stereo_data;
-            self.channels = 2;
         }
 
         Ok(())
@@ -194,11 +181,12 @@ impl AudioEngine
     /// * `num_pixels` - desired number of display pixels
     ///
     /// # Returns
-    /// `Vec<(f32, f32, f32, f32)>` - waveform data optimized for the range
+    /// `Vec<(f32, f32, f32, f32)>` - waveform data as (min_l, max_l, min_r, max_r) tuples
     ///
     /// # Notes
-    /// When zoomed in to less than 1 sample per pixel, returns individual
-    /// sample values instead of downsampled min/max ranges
+    /// For mono audio, left and right values are identical. When zoomed in to less
+    /// than 1 sample per pixel, returns individual sample values instead of
+    /// downsampled min/max ranges.
     pub fn get_waveform_for_range(&self, start_time: f64, end_time: f64, num_pixels: usize) -> Vec<(f32, f32, f32, f32)>
     {
         if self.audio_data.is_empty() || num_pixels == 0
@@ -217,10 +205,8 @@ impl AudioEngine
         let frame_count = end_frame - start_frame;
         let samples_per_pixel = (frame_count as f64) / (num_pixels as f64);
 
-        // individual sample mode when zoomed in far enough
         if samples_per_pixel < 1.0
         {
-            // return individual samples
             let mut waveform = Vec::with_capacity(frame_count);
 
             for frame in start_frame..end_frame
@@ -232,8 +218,16 @@ impl AudioEngine
                     {
                         let left = self.audio_data[idx];
                         let right = self.audio_data[idx + 1];
-                        // for individual samples, min and max are the same value
                         waveform.push((left, left, right, right));
+                    }
+                }
+                else if self.channels == 1
+                {
+                    let idx = frame;
+                    if idx < self.audio_data.len()
+                    {
+                        let sample = self.audio_data[idx];
+                        waveform.push((sample, sample, sample, sample));
                     }
                 }
                 else
@@ -242,7 +236,6 @@ impl AudioEngine
                     if idx < self.audio_data.len()
                     {
                         let sample = self.audio_data[idx];
-                        // for mono, duplicate the values
                         waveform.push((sample, sample, sample, sample));
                     }
                 }
@@ -251,7 +244,6 @@ impl AudioEngine
             return waveform;
         }
 
-        // downsampled mode for normal zoom levels
         let mut waveform = Vec::with_capacity(num_pixels);
 
         for i in 0..num_pixels
@@ -267,7 +259,6 @@ impl AudioEngine
 
             if self.channels == 2
             {
-                // stereo - separate left and right channels
                 let mut min_l = 0.0f32;
                 let mut max_l = 0.0f32;
                 let mut min_r = 0.0f32;
@@ -290,9 +281,25 @@ impl AudioEngine
 
                 waveform.push((min_l, max_l, min_r, max_r));
             }
+            else if self.channels == 1
+            {
+                let mut min_val = 0.0f32;
+                let mut max_val = 0.0f32;
+
+                for frame in pixel_start_frame..pixel_end_frame
+                {
+                    if frame < self.audio_data.len()
+                    {
+                        let sample = self.audio_data[frame];
+                        min_val = min_val.min(sample);
+                        max_val = max_val.max(sample);
+                    }
+                }
+
+                waveform.push((min_val, max_val, min_val, max_val));
+            }
             else
             {
-                // mono - single channel
                 let mut min_val = 0.0f32;
                 let mut max_val = 0.0f32;
 
@@ -307,7 +314,6 @@ impl AudioEngine
                     }
                 }
 
-                // for mono, duplicate the values to maintain consistent tuple size
                 waveform.push((min_val, max_val, min_val, max_val));
             }
         }
@@ -325,7 +331,8 @@ impl AudioEngine
     /// `Result<(), String>` - Ok if successful
     ///
     /// # Notes
-    /// If both times are None and playback is paused, resumes from current position
+    /// If both times are None and playback is paused, resumes from current position.
+    /// Handles both mono and stereo audio correctly.
     pub fn play(&mut self, start_time: Option<f64>, end_time: Option<f64>) -> Result<(), String>
     {
         // resume paused playback if no times specified
@@ -352,14 +359,31 @@ impl AudioEngine
 
         let audio_slice = &self.audio_data[start_sample.min(self.audio_data.len())..end_sample.min(self.audio_data.len())];
 
-        if self.playback.is_none()
+        let playback_channels = if self.channels == 1 { 2 } else { self.channels };
+
+        let playback_data = if self.channels == 1
         {
-            self.playback = Some(AudioPlayback::new(self.sample_rate, self.channels)?);
+            let mut stereo_data = Vec::with_capacity(audio_slice.len() * 2);
+            for &sample in audio_slice
+            {
+                stereo_data.push(sample);
+                stereo_data.push(sample);
+            }
+            stereo_data
+        }
+        else
+        {
+            audio_slice.to_vec()
+        };
+
+        if self.playback.is_none() || self.playback.as_ref().map(|_| self.channels == 1).unwrap_or(false)
+        {
+            self.playback = Some(AudioPlayback::new(self.sample_rate, playback_channels)?);
         }
 
         if let Some(ref mut playback) = self.playback
         {
-            playback.play(audio_slice.to_vec(), start_frame as f64 / self.sample_rate as f64)?;
+            playback.play(playback_data, start_frame as f64 / self.sample_rate as f64)?;
         }
 
         Ok(())
