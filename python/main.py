@@ -120,6 +120,10 @@ class AudioEditorWindow(QMainWindow):
         import_audio_action.triggered.connect(self.import_file)
         import_menu.addAction(import_audio_action)
 
+        clear_action = QAction('Clear All Tracks', self)
+        clear_action.triggered.connect(self.clear_tracks)
+        file_menu.addAction(clear_action)
+
         file_menu.addSeparator()
 
         # export submenu
@@ -209,10 +213,11 @@ class AudioEditorWindow(QMainWindow):
 
     def import_file(self):
         """
-        Open file dialog and import an audio file.
+        Open file dialog and import an audio file as a new track.
 
         Resets zoom and view to show the entire imported file.
-        Displays error message if import fails.
+        Displays error message if import fails. Shows warning if sample
+        rates don't match existing tracks.
         """
         file_path, _ = QFileDialog.getOpenFileName(
             self,
@@ -223,25 +228,46 @@ class AudioEditorWindow(QMainWindow):
 
         if file_path:
             try:
-                self.engine.load_file(file_path)
+                sample_rate, channels, mismatched_rate = self.engine.load_file(file_path)
 
-                # reset zoom and view
+                channel_str = "Stereo" if channels == 2 else "Mono"
+                status_msg = f'Loaded: {file_path} ({sample_rate}Hz, {channel_str})'
+
+                if mismatched_rate is not None:
+                    QMessageBox.warning(
+                        self,
+                        'Sample Rate Mismatch',
+                        f'Warning: This file has a sample rate of {sample_rate}Hz, '
+                        f'but existing tracks use {mismatched_rate}Hz.\n\n'
+                        f'Playback will use {mismatched_rate}Hz for all tracks, '
+                        f'which may cause pitch/speed issues for this track.'
+                    )
+                    status_msg += f' [SAMPLE RATE MISMATCH: {mismatched_rate}Hz vs {sample_rate}Hz]'
+
                 self.waveform.zoom_level = 1.0
                 self.waveform.view_start_time = 0.0
                 self.waveform.view_end_time = self.engine.get_duration()
 
-                # update waveform display
                 self.update_waveform()
-                self.statusBar().showMessage(f'Loaded: {file_path}')
+                self.statusBar().showMessage(status_msg)
             except Exception as e:
                 QMessageBox.critical(self, 'Error', f'Failed to load file: {str(e)}')
+
+    def clear_tracks(self):
+        """Clear all loaded tracks and reset the display."""
+        self.engine.clear_tracks()
+        self.waveform.zoom_level = 1.0
+        self.waveform.view_start_time = 0.0
+        self.waveform.view_end_time = 0.0
+        self.waveform.set_waveform([], 0.0, 2, [])
+        self.statusBar().showMessage('All tracks cleared')
 
     def update_waveform(self):
         """
         Request waveform data from engine and update display.
 
         Automatically adjusts resolution based on zoom level and
-        visible time range. Handles both mono and stereo audio.
+        visible time range. Handles multiple tracks.
         """
         try:
             if not hasattr(self, 'engine'):
@@ -256,6 +282,11 @@ class AudioEditorWindow(QMainWindow):
             except:
                 channels = 2
 
+            try:
+                track_info = self.engine.get_track_info()
+            except:
+                track_info = []
+
             width = self.waveform.width()
             if width <= 0:
                 return
@@ -266,7 +297,7 @@ class AudioEditorWindow(QMainWindow):
                 width
             )
 
-            self.waveform.set_waveform(waveform_data, duration, channels)
+            self.waveform.set_waveform(waveform_data, duration, channels, track_info)
         except Exception as e:
             print(f"Error updating waveform: {e}")
 
@@ -284,19 +315,15 @@ class AudioEditorWindow(QMainWindow):
 
             if selection:
                 start, end = selection
-                # restart if outside selection or at end
                 if current_pos < start or current_pos >= end:
                     self.engine.stop()
                     self.engine.play(start, end)
                 else:
-                    # resume from current position within selection
                     self.engine.play(None, None)
             else:
                 if current_pos > 0 and current_pos < self.engine.get_duration():
-                    # resume from current position
                     self.engine.play(None, None)
                 else:
-                    # start from beginning
                     self.engine.stop()
                     self.engine.play(None, None)
         except Exception as e:
@@ -314,9 +341,7 @@ class AudioEditorWindow(QMainWindow):
     def skip_to_end(self):
         """Stop playback and move cursor to the end of the audio."""
         try:
-            # stop playback first
             self.engine.stop()
-            # set cursor to end
             duration = self.engine.get_duration()
             self.waveform.set_playback_position(duration)
         except Exception as e:
@@ -423,7 +448,7 @@ class AudioEditorWindow(QMainWindow):
 
     def delete_region(self):
         """
-        Delete the currently selected audio region.
+        Delete the currently selected audio region from all tracks.
 
         Positions the playback cursor at the start of the deleted region
         and updates the waveform display.
@@ -435,7 +460,6 @@ class AudioEditorWindow(QMainWindow):
                 self.engine.delete_region(start, end)
                 self.waveform.clear_selection()
 
-                # set playback position to where deleted region started
                 self.engine.set_playback_position(start)
                 self.waveform.set_playback_position(start)
 
@@ -446,7 +470,7 @@ class AudioEditorWindow(QMainWindow):
 
     def export_file(self, file_type='wav'):
         """
-        Export audio to a file with optional format-specific settings.
+        Export mixed audio to a file with optional format-specific settings.
 
         Parameters
         ----------
@@ -457,6 +481,7 @@ class AudioEditorWindow(QMainWindow):
         -----
         Shows a dialog for FLAC/MP3 options before the save dialog.
         Exports the selection if one exists, otherwise exports entire file.
+        All tracks are mixed together for export.
         """
         try:
             compression_level = None
@@ -473,13 +498,13 @@ class AudioEditorWindow(QMainWindow):
                 elif file_type == 'mp3':
                     bitrate = dialog.get_bitrate()
 
-            # then show file save dialog
             filter_map = {
                 'wav': "WAV Files (*.wav)",
                 'flac': "FLAC Files (*.flac)",
                 'mp3': "MP3 Files (*.mp3)"
             }
 
+            # then show file save dialog
             file_path, _ = QFileDialog.getSaveFileName(
                 self,
                 f"Export as {file_type.upper()}",

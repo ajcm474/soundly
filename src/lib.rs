@@ -19,6 +19,9 @@ struct AudioEditor
 impl AudioEditor
 {
     /// Create a new audio editor instance
+    ///
+    /// # Returns
+    /// `PyResult<Self>` - new audio editor
     #[new]
     fn new() -> PyResult<Self>
     {
@@ -28,17 +31,17 @@ impl AudioEditor
         })
     }
 
-    /// Load an audio file from disk
+    /// Load an audio file from disk as a new track
     ///
     /// # Parameters
     /// * `path` - filesystem path to audio file (WAV, FLAC, or MP3)
     ///
     /// # Returns
-    /// `PyResult<()>` - Ok if successful
+    /// `PyResult<(u32, usize, Option<u32>)>` - (sample_rate, channels, mismatched_sample_rate)
     ///
     /// # Errors
     /// Returns error if file cannot be read or decoded
-    fn load_file(&mut self, path: String) -> PyResult<()>
+    fn load_file(&mut self, path: String) -> PyResult<(u32, usize, Option<u32>)>
     {
         self.engine
             .lock()
@@ -47,7 +50,35 @@ impl AudioEditor
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to load file: {}", e)))
     }
 
-    /// Get waveform data for a specific time range
+    /// Clear all loaded tracks
+    ///
+    /// # Returns
+    /// `PyResult<()>` - always Ok
+    fn clear_tracks(&mut self) -> PyResult<()>
+    {
+        self.engine.lock().unwrap().clear_tracks();
+        Ok(())
+    }
+
+    /// Get number of loaded tracks
+    ///
+    /// # Returns
+    /// `usize` - number of tracks
+    fn get_track_count(&self) -> PyResult<usize>
+    {
+        Ok(self.engine.lock().unwrap().get_track_count())
+    }
+
+    /// Get information about all loaded tracks
+    ///
+    /// # Returns
+    /// `Vec<(String, u32, usize, f64)>` - vector of (name, sample_rate, channels, duration)
+    fn get_track_info(&self) -> PyResult<Vec<(String, u32, usize, f64)>>
+    {
+        Ok(self.engine.lock().unwrap().get_track_info())
+    }
+
+    /// Get waveform data for a specific time range for all tracks
     ///
     /// # Parameters
     /// * `start_time` - start of range in seconds
@@ -55,16 +86,16 @@ impl AudioEditor
     /// * `num_pixels` - desired number of data points
     ///
     /// # Returns
-    /// `Vec<(f32, f32, f32, f32)>` - waveform data for the range
+    /// `Vec<Vec<(f32, f32, f32, f32)>>` - waveform data per track
     ///
     /// # Notes
-    /// Automatically switches to individual sample mode when zoomed in far enough
-    fn get_waveform_for_range(&self, start_time: f64, end_time: f64, num_pixels: usize) -> PyResult<Vec<(f32, f32, f32, f32)>>
+    /// Returns separate waveform data for each track
+    fn get_waveform_for_range(&self, start_time: f64, end_time: f64, num_pixels: usize) -> PyResult<Vec<Vec<(f32, f32, f32, f32)>>>
     {
         Ok(self.engine.lock().unwrap().get_waveform_for_range(start_time, end_time, num_pixels))
     }
 
-    /// Get the sample rate of loaded audio
+    /// Get the sample rate of the first loaded track
     ///
     /// # Returns
     /// `u32` - sample rate in Hz
@@ -73,7 +104,7 @@ impl AudioEditor
         Ok(self.engine.lock().unwrap().get_sample_rate())
     }
 
-    /// Get the duration of loaded audio
+    /// Get the duration of the longest track
     ///
     /// # Returns
     /// `f64` - duration in seconds
@@ -82,7 +113,7 @@ impl AudioEditor
         Ok(self.engine.lock().unwrap().get_duration())
     }
 
-    /// Get the number of audio channels
+    /// Get the number of audio channels (maximum across all tracks)
     ///
     /// # Returns
     /// `usize` - number of channels (1=mono, 2=stereo)
@@ -162,7 +193,7 @@ impl AudioEditor
         Ok(())
     }
 
-    /// Delete a region of audio
+    /// Delete a region of audio from all tracks
     ///
     /// # Parameters
     /// * `start_time` - start of region in seconds
@@ -182,7 +213,7 @@ impl AudioEditor
             .map_err(|e| PyRuntimeError::new_err(format!("Delete error: {}", e)))
     }
 
-    /// Export audio to a file
+    /// Export mixed audio to a file
     ///
     /// # Parameters
     /// * `path` - output file path with extension (.wav, .flac, or .mp3)

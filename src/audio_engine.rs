@@ -9,40 +9,51 @@ use std::path::Path;
 use std::io::Write;
 use crate::playback::AudioPlayback;
 
+/// Represents a single audio track
+pub struct AudioTrack
+{
+    pub audio_data: Vec<f32>,
+    pub sample_rate: u32,
+    pub channels: usize,
+    pub name: String,
+}
+
 /// Core audio engine for loading, processing, and exporting audio
 pub struct AudioEngine
 {
-    audio_data: Vec<f32>,
-    sample_rate: u32,
-    channels: usize,
+    tracks: Vec<AudioTrack>,
     playback: Option<AudioPlayback>,
+    playback_sample_rate: Option<u32>,
 }
 
 impl AudioEngine
 {
     /// Create a new audio engine instance
+    ///
+    /// # Returns
+    /// `AudioEngine` - new engine with no tracks loaded
     pub fn new() -> Self
     {
         AudioEngine
         {
-            audio_data: Vec::new(),
-            sample_rate: 44100,
-            channels: 2,
+            tracks: Vec::new(),
             playback: None,
+            playback_sample_rate: None,
         }
     }
 
-    /// Load and decode an audio file
+    /// Load and decode an audio file as a new track
     ///
     /// # Parameters
     /// * `path` - filesystem path to audio file
     ///
     /// # Returns
-    /// `Result<(), String>` - Ok if successful, Err with message otherwise
+    /// `Result<(u32, usize, Option<u32>), String>` - Ok with (sample_rate, channels, mismatched_rate) if successful
     ///
     /// # Notes
-    /// Preserves original channel configuration (mono or stereo)
-    pub fn load_file(&mut self, path: &str) -> Result<(), String>
+    /// Preserves original channel configuration (mono or stereo).
+    /// Returns the previous sample rate if there's a mismatch with existing tracks.
+    pub fn load_file(&mut self, path: &str) -> Result<(u32, usize, Option<u32>), String>
     {
         let file = File::open(path).map_err(|e| e.to_string())?;
         let mss = MediaSourceStream::new(Box::new(file), Default::default());
@@ -72,9 +83,9 @@ impl AudioEngine
             .make(&track.codec_params, &dec_opts)
             .map_err(|e| format!("Decoder error: {}", e))?;
 
-        self.sample_rate = track.codec_params.sample_rate.unwrap_or(44100);
-        self.channels = track.codec_params.channels.unwrap_or_default().count();
-        self.audio_data.clear();
+        let sample_rate = track.codec_params.sample_rate.unwrap_or(44100);
+        let channels = track.codec_params.channels.unwrap_or_default().count();
+        let mut audio_data = Vec::new();
 
         loop
         {
@@ -88,23 +99,58 @@ impl AudioEngine
             {
                 Ok(audio_buf) =>
                 {
-                    self.append_audio_buffer(audio_buf);
+                    Self::append_audio_buffer(&mut audio_data, audio_buf, channels);
                 }
                 Err(_) => continue,
             }
         }
 
-        Ok(())
+        let track_name = Path::new(path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("Unknown")
+            .to_string();
+
+        let mismatched_rate = if !self.tracks.is_empty()
+        {
+            let existing_rate = self.tracks[0].sample_rate;
+            if existing_rate != sample_rate
+            {
+                Some(existing_rate)
+            }
+            else
+            {
+                None
+            }
+        }
+        else
+        {
+            None
+        };
+
+        let new_track = AudioTrack
+        {
+            audio_data,
+            sample_rate,
+            channels,
+            name: track_name,
+        };
+
+        self.tracks.push(new_track);
+
+        Ok((sample_rate, channels, mismatched_rate))
     }
 
-    /// Append decoded audio buffer to internal storage
+    /// Append decoded audio buffer to storage
     ///
     /// # Parameters
+    /// * `audio_data` - vector to append to
     /// * `audio_buf` - decoded audio buffer from symphonia
+    /// * `channels` - number of channels
     ///
     /// # Notes
     /// Handles F32, S32, and S16 sample formats, converting to F32
-    fn append_audio_buffer(&mut self, audio_buf: AudioBufferRef)
+    fn append_audio_buffer(audio_data: &mut Vec<f32>, audio_buf: AudioBufferRef, channels: usize)
     {
         match audio_buf
         {
@@ -112,9 +158,9 @@ impl AudioEngine
             {
                 for frame in 0..buf.frames()
                 {
-                    for ch in 0..buf.spec().channels.count()
+                    for ch in 0..channels.min(buf.spec().channels.count())
                     {
-                        self.audio_data.push(buf.chan(ch)[frame]);
+                        audio_data.push(buf.chan(ch)[frame]);
                     }
                 }
             }
@@ -122,9 +168,9 @@ impl AudioEngine
             {
                 for frame in 0..buf.frames()
                 {
-                    for ch in 0..buf.spec().channels.count()
+                    for ch in 0..channels.min(buf.spec().channels.count())
                     {
-                        self.audio_data.push(buf.chan(ch)[frame] as f32 / i32::MAX as f32);
+                        audio_data.push(buf.chan(ch)[frame] as f32 / i32::MAX as f32);
                     }
                 }
             }
@@ -132,9 +178,9 @@ impl AudioEngine
             {
                 for frame in 0..buf.frames()
                 {
-                    for ch in 0..buf.spec().channels.count()
+                    for ch in 0..channels.min(buf.spec().channels.count())
                     {
-                        self.audio_data.push(buf.chan(ch)[frame] as f32 / i16::MAX as f32);
+                        audio_data.push(buf.chan(ch)[frame] as f32 / i16::MAX as f32);
                     }
                 }
             }
@@ -142,38 +188,81 @@ impl AudioEngine
         }
     }
 
-    /// Get sample rate of loaded audio
+    /// Get sample rate of the first loaded track
     ///
     /// # Returns
-    /// `u32` - sample rate in Hz
+    /// `u32` - sample rate in Hz, or 44100 if no tracks loaded
     pub fn get_sample_rate(&self) -> u32
     {
-        self.sample_rate
+        self.tracks.first().map(|t| t.sample_rate).unwrap_or(44100)
     }
 
-    /// Get duration of loaded audio
+    /// Get duration of the longest track
     ///
     /// # Returns
     /// `f64` - duration in seconds
     pub fn get_duration(&self) -> f64
     {
-        if self.audio_data.is_empty()
+        self.tracks.iter().map(|track|
         {
-            return 0.0;
-        }
-        (self.audio_data.len() / self.channels) as f64 / self.sample_rate as f64
+            if track.audio_data.is_empty()
+            {
+                0.0
+            }
+            else
+            {
+                (track.audio_data.len() / track.channels) as f64 / track.sample_rate as f64
+            }
+        }).fold(0.0, f64::max)
     }
 
-    /// Get number of audio channels
+    /// Get number of audio channels (maximum across all tracks)
     ///
     /// # Returns
     /// `usize` - number of channels
     pub fn get_channels(&self) -> usize
     {
-        self.channels
+        self.tracks.iter().map(|t| t.channels).max().unwrap_or(2)
     }
 
-    /// Get waveform data for a specific time range
+    /// Get number of loaded tracks
+    ///
+    /// # Returns
+    /// `usize` - number of tracks
+    pub fn get_track_count(&self) -> usize
+    {
+        self.tracks.len()
+    }
+
+    /// Get information about all loaded tracks
+    ///
+    /// # Returns
+    /// `Vec<(String, u32, usize, f64)>` - vector of (name, sample_rate, channels, duration)
+    pub fn get_track_info(&self) -> Vec<(String, u32, usize, f64)>
+    {
+        self.tracks.iter().map(|track|
+        {
+            let duration = if track.audio_data.is_empty()
+            {
+                0.0
+            }
+            else
+            {
+                (track.audio_data.len() / track.channels) as f64 / track.sample_rate as f64
+            };
+            (track.name.clone(), track.sample_rate, track.channels, duration)
+        }).collect()
+    }
+
+    /// Clear all loaded tracks
+    pub fn clear_tracks(&mut self)
+    {
+        self.tracks.clear();
+        self.playback = None;
+        self.playback_sample_rate = None;
+    }
+
+    /// Get waveform data for a specific time range for all tracks
     ///
     /// # Parameters
     /// * `start_time` - start of range in seconds
@@ -181,25 +270,47 @@ impl AudioEngine
     /// * `num_pixels` - desired number of display pixels
     ///
     /// # Returns
-    /// `Vec<(f32, f32, f32, f32)>` - waveform data as (min_l, max_l, min_r, max_r) tuples
+    /// `Vec<Vec<(f32, f32, f32, f32)>>` - waveform data per track as (min_l, max_l, min_r, max_r) tuples
     ///
     /// # Notes
-    /// For mono audio, left and right values are identical. When zoomed in to less
-    /// than 1 sample per pixel, returns individual sample values instead of
-    /// downsampled min/max ranges.
-    pub fn get_waveform_for_range(&self, start_time: f64, end_time: f64, num_pixels: usize) -> Vec<(f32, f32, f32, f32)>
+    /// Returns separate waveform data for each track. For mono audio, left and right
+    /// values are identical.
+    pub fn get_waveform_for_range(&self, start_time: f64, end_time: f64, num_pixels: usize) -> Vec<Vec<(f32, f32, f32, f32)>>
     {
-        if self.audio_data.is_empty() || num_pixels == 0
+        if self.tracks.is_empty() || num_pixels == 0
         {
             return Vec::new();
         }
 
-        let start_frame = ((start_time * self.sample_rate as f64) as usize).min(self.audio_data.len() / self.channels);
-        let end_frame = ((end_time * self.sample_rate as f64) as usize).min(self.audio_data.len() / self.channels);
+        self.tracks.iter().map(|track|
+        {
+            Self::get_track_waveform(track, start_time, end_time, num_pixels)
+        }).collect()
+    }
+
+    /// Get waveform data for a single track
+    ///
+    /// # Parameters
+    /// * `track` - audio track to analyze
+    /// * `start_time` - start of range in seconds
+    /// * `end_time` - end of range in seconds
+    /// * `num_pixels` - desired number of display pixels
+    ///
+    /// # Returns
+    /// `Vec<(f32, f32, f32, f32)>` - waveform data as (min_l, max_l, min_r, max_r) tuples
+    fn get_track_waveform(track: &AudioTrack, start_time: f64, end_time: f64, num_pixels: usize) -> Vec<(f32, f32, f32, f32)>
+    {
+        if track.audio_data.is_empty() || num_pixels == 0
+        {
+            return vec![(0.0, 0.0, 0.0, 0.0); num_pixels];
+        }
+
+        let start_frame = ((start_time * track.sample_rate as f64) as usize).min(track.audio_data.len() / track.channels);
+        let end_frame = ((end_time * track.sample_rate as f64) as usize).min(track.audio_data.len() / track.channels);
 
         if start_frame >= end_frame
         {
-            return Vec::new();
+            return vec![(0.0, 0.0, 0.0, 0.0); num_pixels];
         }
 
         let frame_count = end_frame - start_frame;
@@ -207,36 +318,54 @@ impl AudioEngine
 
         if samples_per_pixel < 1.0
         {
-            let mut waveform = Vec::with_capacity(frame_count);
+            let mut waveform = Vec::with_capacity(num_pixels);
 
-            for frame in start_frame..end_frame
+            for i in 0..num_pixels
             {
-                if self.channels == 2
+                let frame = start_frame + (i as f64 * frame_count as f64 / num_pixels as f64) as usize;
+                if frame >= end_frame
+                {
+                    waveform.push((0.0, 0.0, 0.0, 0.0));
+                    continue;
+                }
+
+                if track.channels == 2
                 {
                     let idx = frame * 2;
-                    if idx + 1 < self.audio_data.len()
+                    if idx + 1 < track.audio_data.len()
                     {
-                        let left = self.audio_data[idx];
-                        let right = self.audio_data[idx + 1];
+                        let left = track.audio_data[idx];
+                        let right = track.audio_data[idx + 1];
                         waveform.push((left, left, right, right));
                     }
-                }
-                else if self.channels == 1
-                {
-                    let idx = frame;
-                    if idx < self.audio_data.len()
+                    else
                     {
-                        let sample = self.audio_data[idx];
+                        waveform.push((0.0, 0.0, 0.0, 0.0));
+                    }
+                }
+                else if track.channels == 1
+                {
+                    if frame < track.audio_data.len()
+                    {
+                        let sample = track.audio_data[frame];
                         waveform.push((sample, sample, sample, sample));
+                    }
+                    else
+                    {
+                        waveform.push((0.0, 0.0, 0.0, 0.0));
                     }
                 }
                 else
                 {
-                    let idx = frame * self.channels;
-                    if idx < self.audio_data.len()
+                    let idx = frame * track.channels;
+                    if idx < track.audio_data.len()
                     {
-                        let sample = self.audio_data[idx];
+                        let sample = track.audio_data[idx];
                         waveform.push((sample, sample, sample, sample));
+                    }
+                    else
+                    {
+                        waveform.push((0.0, 0.0, 0.0, 0.0));
                     }
                 }
             }
@@ -257,7 +386,7 @@ impl AudioEngine
                 continue;
             }
 
-            if self.channels == 2
+            if track.channels == 2
             {
                 let mut min_l = 0.0f32;
                 let mut max_l = 0.0f32;
@@ -267,10 +396,10 @@ impl AudioEngine
                 for frame in pixel_start_frame..pixel_end_frame
                 {
                     let idx = frame * 2;
-                    if idx + 1 < self.audio_data.len()
+                    if idx + 1 < track.audio_data.len()
                     {
-                        let left = self.audio_data[idx];
-                        let right = self.audio_data[idx + 1];
+                        let left = track.audio_data[idx];
+                        let right = track.audio_data[idx + 1];
 
                         min_l = min_l.min(left);
                         max_l = max_l.max(left);
@@ -281,16 +410,16 @@ impl AudioEngine
 
                 waveform.push((min_l, max_l, min_r, max_r));
             }
-            else if self.channels == 1
+            else if track.channels == 1
             {
                 let mut min_val = 0.0f32;
                 let mut max_val = 0.0f32;
 
                 for frame in pixel_start_frame..pixel_end_frame
                 {
-                    if frame < self.audio_data.len()
+                    if frame < track.audio_data.len()
                     {
-                        let sample = self.audio_data[frame];
+                        let sample = track.audio_data[frame];
                         min_val = min_val.min(sample);
                         max_val = max_val.max(sample);
                     }
@@ -305,10 +434,10 @@ impl AudioEngine
 
                 for frame in pixel_start_frame..pixel_end_frame
                 {
-                    let idx = frame * self.channels;
-                    if idx < self.audio_data.len()
+                    let idx = frame * track.channels;
+                    if idx < track.audio_data.len()
                     {
-                        let sample = self.audio_data[idx];
+                        let sample = track.audio_data[idx];
                         min_val = min_val.min(sample);
                         max_val = max_val.max(sample);
                     }
@@ -319,6 +448,83 @@ impl AudioEngine
         }
 
         waveform
+    }
+
+    /// Mix all tracks together for playback
+    ///
+    /// # Parameters
+    /// * `start_time` - start time in seconds
+    /// * `end_time` - end time in seconds
+    ///
+    /// # Returns
+    /// `(Vec<f32>, u32, usize)` - mixed audio data, sample rate, and channel count
+    ///
+    /// # Notes
+    /// Converts all tracks to stereo and mixes them together. Uses the sample rate
+    /// of the first track.
+    fn mix_tracks_for_playback(&self, start_time: f64, end_time: f64) -> (Vec<f32>, u32, usize)
+    {
+        if self.tracks.is_empty()
+        {
+            return (Vec::new(), 44100, 2);
+        }
+
+        let sample_rate = self.tracks[0].sample_rate;
+        let output_channels = 2;
+
+        let start_frame = (start_time * sample_rate as f64) as usize;
+        let end_frame = (end_time * sample_rate as f64) as usize;
+        let total_frames = end_frame - start_frame;
+
+        let mut mixed_data = vec![0.0f32; total_frames * output_channels];
+
+        for track in &self.tracks
+        {
+            let track_start_frame = (start_time * track.sample_rate as f64) as usize;
+            let track_end_frame = (end_time * track.sample_rate as f64) as usize;
+
+            for frame_idx in 0..total_frames
+            {
+                let track_frame = track_start_frame + frame_idx;
+                let output_idx = frame_idx * output_channels;
+
+                if track.channels == 2
+                {
+                    let track_idx = track_frame * 2;
+                    if track_idx + 1 < track.audio_data.len()
+                    {
+                        mixed_data[output_idx] += track.audio_data[track_idx];
+                        mixed_data[output_idx + 1] += track.audio_data[track_idx + 1];
+                    }
+                }
+                else if track.channels == 1
+                {
+                    if track_frame < track.audio_data.len()
+                    {
+                        let sample = track.audio_data[track_frame];
+                        mixed_data[output_idx] += sample;
+                        mixed_data[output_idx + 1] += sample;
+                    }
+                }
+                else
+                {
+                    let track_idx = track_frame * track.channels;
+                    if track_idx < track.audio_data.len()
+                    {
+                        let sample = track.audio_data[track_idx];
+                        mixed_data[output_idx] += sample;
+                        mixed_data[output_idx + 1] += sample;
+                    }
+                }
+            }
+        }
+
+        for sample in &mut mixed_data
+        {
+            *sample = sample.clamp(-1.0, 1.0);
+        }
+
+        (mixed_data, sample_rate, output_channels)
     }
 
     /// Start audio playback
@@ -332,7 +538,7 @@ impl AudioEngine
     ///
     /// # Notes
     /// If both times are None and playback is paused, resumes from current position.
-    /// Handles both mono and stereo audio correctly.
+    /// Mixes all tracks together for playback.
     pub fn play(&mut self, start_time: Option<f64>, end_time: Option<f64>) -> Result<(), String>
     {
         // resume paused playback if no times specified
@@ -348,42 +554,24 @@ impl AudioEngine
             }
         }
 
-        // otherwise start new playback
-        let start_frame = start_time.map(|t| (t * self.sample_rate as f64) as usize).unwrap_or(0);
-        let end_frame = end_time
-            .map(|t| (t * self.sample_rate as f64) as usize)
-            .unwrap_or(self.audio_data.len() / self.channels);
+        let duration = self.get_duration();
+        let start = start_time.unwrap_or(0.0);
+        let end = end_time.unwrap_or(duration);
 
-        let start_sample = start_frame * self.channels;
-        let end_sample = end_frame * self.channels;
+        let (mixed_data, sample_rate, channels) = self.mix_tracks_for_playback(start, end);
 
-        let audio_slice = &self.audio_data[start_sample.min(self.audio_data.len())..end_sample.min(self.audio_data.len())];
+        let needs_new_playback = self.playback.is_none() ||
+            self.playback_sample_rate != Some(sample_rate);
 
-        let playback_channels = if self.channels == 1 { 2 } else { self.channels };
-
-        let playback_data = if self.channels == 1
+        if needs_new_playback
         {
-            let mut stereo_data = Vec::with_capacity(audio_slice.len() * 2);
-            for &sample in audio_slice
-            {
-                stereo_data.push(sample);
-                stereo_data.push(sample);
-            }
-            stereo_data
-        }
-        else
-        {
-            audio_slice.to_vec()
-        };
-
-        if self.playback.is_none() || self.playback.as_ref().map(|_| self.channels == 1).unwrap_or(false)
-        {
-            self.playback = Some(AudioPlayback::new(self.sample_rate, playback_channels)?);
+            self.playback = Some(AudioPlayback::new(sample_rate, channels)?);
+            self.playback_sample_rate = Some(sample_rate);
         }
 
         if let Some(ref mut playback) = self.playback
         {
-            playback.play(playback_data, start_frame as f64 / self.sample_rate as f64)?;
+            playback.play(mixed_data, start)?;
         }
 
         Ok(())
@@ -440,7 +628,7 @@ impl AudioEngine
         }
     }
 
-    /// Delete a region of audio
+    /// Delete a region of audio from all tracks
     ///
     /// # Parameters
     /// * `start_time` - start of region in seconds
@@ -448,67 +636,63 @@ impl AudioEngine
     ///
     /// # Returns
     /// `Result<(), String>` - Ok if successful
-    ///
-    /// # Errors
-    /// Returns error if start position is out of bounds
     pub fn delete_region(&mut self, start_time: f64, end_time: f64) -> Result<(), String>
     {
-        let start_frame = (start_time * self.sample_rate as f64) as usize;
-        let end_frame = (end_time * self.sample_rate as f64) as usize;
-
-        let start_sample = start_frame * self.channels;
-        let end_sample = end_frame * self.channels;
-
-        if start_sample >= self.audio_data.len()
+        for track in &mut self.tracks
         {
-            return Err("Start position out of bounds".to_string());
-        }
+            let start_frame = (start_time * track.sample_rate as f64) as usize;
+            let end_frame = (end_time * track.sample_rate as f64) as usize;
 
-        let end_sample = end_sample.min(self.audio_data.len());
-        self.audio_data.drain(start_sample..end_sample);
+            let start_sample = start_frame * track.channels;
+            let end_sample = end_frame * track.channels;
+
+            if start_sample >= track.audio_data.len()
+            {
+                continue;
+            }
+
+            let end_sample = end_sample.min(track.audio_data.len());
+            track.audio_data.drain(start_sample..end_sample);
+        }
 
         Ok(())
     }
 
-    /// Export audio to a file
+    /// Export mixed audio to a file
     ///
     /// # Parameters
-    /// * `path` - output file path with extension
-    /// * `start_time` - optional start time in seconds
-    /// * `end_time` - optional end time in seconds
-    /// * `compression_level` - optional FLAC compression level 0-8
-    /// * `bitrate_kbps` - optional MP3 bitrate in kbps
+    /// * `path` - output file path with extension (.wav, .flac, or .mp3)
+    /// * `start_time` - optional start time in seconds (None for beginning)
+    /// * `end_time` - optional end time in seconds (None for end)
+    /// * `compression_level` - optional FLAC compression level 0-8 (None for default 5)
+    /// * `bitrate_kbps` - optional MP3 bitrate in kbps (None for default 192)
     ///
     /// # Returns
     /// `Result<(), String>` - Ok if successful
     ///
     /// # Notes
-    /// Format is determined by file extension (.wav, .flac, or .mp3)
+    /// Format is determined by file extension. All tracks are mixed together for export.
     pub fn export_audio(&self, path: &str, start_time: Option<f64>, end_time: Option<f64>,
                         compression_level: Option<u8>, bitrate_kbps: Option<u32>) -> Result<(), String>
     {
-        let start_frame = start_time.map(|t| (t * self.sample_rate as f64) as usize).unwrap_or(0);
-        let end_frame = end_time
-            .map(|t| (t * self.sample_rate as f64) as usize)
-            .unwrap_or(self.audio_data.len() / self.channels);
+        let duration = self.get_duration();
+        let start = start_time.unwrap_or(0.0);
+        let end = end_time.unwrap_or(duration);
 
-        let start_sample = start_frame * self.channels;
-        let end_sample = (end_frame * self.channels).min(self.audio_data.len());
-
-        let export_data = &self.audio_data[start_sample..end_sample];
+        let (export_data, sample_rate, channels) = self.mix_tracks_for_playback(start, end);
 
         let path_lower = path.to_lowercase();
         if path_lower.ends_with(".wav")
         {
-            self.export_wav(path, export_data)?;
+            self.export_wav(path, &export_data, sample_rate, channels)?;
         }
         else if path_lower.ends_with(".flac")
         {
-            self.export_flac(path, export_data, compression_level.unwrap_or(5))?;
+            self.export_flac(path, &export_data, sample_rate, channels, compression_level.unwrap_or(5))?;
         }
         else if path_lower.ends_with(".mp3")
         {
-            self.export_mp3(path, export_data, bitrate_kbps.unwrap_or(192))?;
+            self.export_mp3(path, &export_data, sample_rate, channels, bitrate_kbps.unwrap_or(192))?;
         }
         else
         {
@@ -523,18 +707,17 @@ impl AudioEngine
     /// # Parameters
     /// * `path` - output file path
     /// * `data` - audio sample data
+    /// * `sample_rate` - sample rate in Hz
+    /// * `channels` - number of channels
     ///
     /// # Returns
     /// `Result<(), String>` - Ok if successful
-    ///
-    /// # Notes
-    /// Exports as 16-bit PCM WAV
-    fn export_wav(&self, path: &str, data: &[f32]) -> Result<(), String>
+    fn export_wav(&self, path: &str, data: &[f32], sample_rate: u32, channels: usize) -> Result<(), String>
     {
         let spec = hound::WavSpec
         {
-            channels: self.channels as u16,
-            sample_rate: self.sample_rate,
+            channels: channels as u16,
+            sample_rate,
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
         };
@@ -560,20 +743,21 @@ impl AudioEngine
     /// # Parameters
     /// * `path` - output file path
     /// * `data` - audio sample data
+    /// * `sample_rate` - sample rate in Hz
+    /// * `channels` - number of channels
     /// * `compression_level` - compression level 0-8
     ///
     /// # Returns
     /// `Result<(), String>` - Ok if successful
-    fn export_flac(&self, path: &str, data: &[f32], compression_level: u8) -> Result<(), String>
+    fn export_flac(&self, path: &str, data: &[f32], sample_rate: u32, channels: usize, compression_level: u8) -> Result<(), String>
     {
         use std::path::Path;
 
-        // use the custom FLAC encoder
         crate::flac::export_to_flac_with_level(
             Path::new(path),
             data,
-            self.sample_rate,
-            self.channels as u16,
+            sample_rate,
+            channels as u16,
             compression_level,
         )
             .map_err(|e| format!("Failed to export FLAC: {}", e))?;
@@ -586,14 +770,13 @@ impl AudioEngine
     /// # Parameters
     /// * `path` - output file path
     /// * `data` - audio sample data
+    /// * `sample_rate` - sample rate in Hz
+    /// * `channels` - number of channels
     /// * `bitrate_kbps` - bitrate in kbps (128, 160, 192, 256, or 320)
     ///
     /// # Returns
     /// `Result<(), String>` - Ok if successful
-    ///
-    /// # Notes
-    /// Uses LAME encoder with good quality preset
-    fn export_mp3(&self, path: &str, data: &[f32], bitrate_kbps: u32) -> Result<(), String>
+    fn export_mp3(&self, path: &str, data: &[f32], sample_rate: u32, channels: usize, bitrate_kbps: u32) -> Result<(), String>
     {
         use mp3lame_encoder::{Builder, InterleavedPcm, FlushNoGap, Bitrate};
         use std::mem::MaybeUninit;
@@ -609,10 +792,10 @@ impl AudioEngine
         let mut mp3_encoder = Builder::new()
             .ok_or("Failed to create MP3 encoder")?;
 
-        mp3_encoder.set_sample_rate(self.sample_rate)
+        mp3_encoder.set_sample_rate(sample_rate)
                    .map_err(|e| format!("Failed to set sample rate: {:?}", e))?;
 
-        mp3_encoder.set_num_channels(self.channels as u8)
+        mp3_encoder.set_num_channels(channels as u8)
                    .map_err(|e| format!("Failed to set channels: {:?}", e))?;
 
         let bitrate = match bitrate_kbps
@@ -634,7 +817,6 @@ impl AudioEngine
         let mut mp3_encoder = mp3_encoder.build()
                                          .map_err(|e| format!("Failed to build encoder: {:?}", e))?;
 
-        // encode
         let input = InterleavedPcm(&samples_i16);
         let mut mp3_out = Vec::new();
 
@@ -657,7 +839,6 @@ impl AudioEngine
         let _flushed_size = mp3_encoder.flush_to_vec::<FlushNoGap>(&mut mp3_out)
                                        .map_err(|e| format!("Failed to flush MP3: {:?}", e))?;
 
-        // write to file
         let mut file = File::create(path)
             .map_err(|e| format!("Failed to create MP3 file: {}", e))?;
         file.write_all(&mp3_out)
