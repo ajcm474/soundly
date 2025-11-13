@@ -14,6 +14,7 @@ class WaveformWidget(QWidget):
         self.duration = 0.0
         self.selection_start = None
         self.selection_end = None
+        self.selection_tracks = set()
         self.is_selecting = False
         self.playback_position = 0.0
         self.zoom_level = 1.0
@@ -101,6 +102,37 @@ class WaveformWidget(QWidget):
 
         self.update()
 
+    def get_track_at_y(self, y):
+        """
+        Determine which track is at the given y coordinate.
+
+        Parameters
+        ----------
+        y : float
+            y coordinate in pixels
+
+        Returns
+        -------
+        int or None
+            track index, or None if outside track area
+        """
+        ruler_height = 30
+        if y < ruler_height:
+            return None
+
+        num_tracks = len(self.waveform_data)
+        if num_tracks == 0:
+            return None
+
+        waveform_height = self.height() - ruler_height
+        track_height = waveform_height / num_tracks
+
+        track_idx = int((y - ruler_height) / track_height)
+        if track_idx < 0 or track_idx >= num_tracks:
+            return None
+
+        return track_idx
+
     def update_view_bounds(self):
         """Ensure view bounds are valid and within audio duration."""
         if self.duration == 0:
@@ -125,8 +157,9 @@ class WaveformWidget(QWidget):
 
         Notes
         -----
-        Draws time ruler, track waveforms with separators, selection highlight,
-        and playback position indicator.
+        Draws time ruler, track waveforms with separators, selection highlight
+        per track, and playback position indicator. Shorter tracks show black
+        space after their duration.
         """
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -154,18 +187,6 @@ class WaveformWidget(QWidget):
             painter.restore()
             return
 
-        # draw selection highlight
-        if self.selection_start is not None and self.selection_end is not None:
-            sel_start = min(self.selection_start, self.selection_end)
-            sel_end = max(self.selection_start, self.selection_end)
-
-            # only draw if selection is visible
-            if sel_end >= self.view_start_time and sel_start <= self.view_end_time:
-                start_x = self.time_to_x(sel_start)
-                end_x = self.time_to_x(sel_end)
-                painter.fillRect(QRectF(start_x, 0, end_x - start_x, waveform_height),
-                                 QColor(100, 150, 255, 80))
-
         num_tracks = len(self.waveform_data)
         if num_tracks == 0:
             painter.restore()
@@ -184,12 +205,27 @@ class WaveformWidget(QWidget):
             track_y_offset = track_idx * track_height
             track_color = track_colors[track_idx % len(track_colors)]
 
+            if self.selection_start is not None and self.selection_end is not None:
+                if track_idx in self.selection_tracks:
+                    sel_start = min(self.selection_start, self.selection_end)
+                    sel_end = max(self.selection_start, self.selection_end)
+
+                    if sel_end >= self.view_start_time and sel_start <= self.view_end_time:
+                        start_x = self.time_to_x(sel_start)
+                        end_x = self.time_to_x(sel_end)
+                        painter.fillRect(QRectF(start_x, track_y_offset, end_x - start_x, track_height),
+                                         QColor(100, 150, 255, 80))
+
             if track_idx > 0:
                 painter.setPen(QPen(QColor(100, 100, 100), 2))
                 painter.drawLine(0, int(track_y_offset), width, int(track_y_offset))
 
+            track_duration = 0.0
+            track_channels = 2
             if track_idx < len(self.track_info):
                 info = self.track_info[track_idx]
+                track_duration = info[3]
+                track_channels = info[2]
                 label = f"{info[0]} ({info[1]}Hz, {'Stereo' if info[2] == 2 else 'Mono'})"
             else:
                 label = f"Track {track_idx + 1}"
@@ -205,7 +241,7 @@ class WaveformWidget(QWidget):
             if total_samples == 0:
                 continue
 
-            is_stereo = self.channels == 2 or (track_idx < len(self.track_info) and self.track_info[track_idx][2] == 2)
+            is_stereo = track_channels == 2
 
             if is_stereo:
                 channel_height = track_height / 2
@@ -224,6 +260,10 @@ class WaveformWidget(QWidget):
 
                 for i in range(total_samples):
                     if i >= len(track_data):
+                        break
+
+                    sample_time = self.view_start_time + (i / total_samples) * visible_duration
+                    if sample_time > track_duration:
                         break
 
                     x = (i / total_samples) * width
@@ -246,6 +286,10 @@ class WaveformWidget(QWidget):
 
                 for i in range(total_samples):
                     if i >= len(track_data):
+                        break
+
+                    sample_time = self.view_start_time + (i / total_samples) * visible_duration
+                    if sample_time > track_duration:
                         break
 
                     x = (i / total_samples) * width
@@ -352,16 +396,22 @@ class WaveformWidget(QWidget):
 
         Notes
         -----
-        Ignores clicks in the ruler area at top of widget.
+        Ignores clicks in the ruler area at top of widget. Starts selection
+        on the track under the mouse cursor.
         """
         if event.button() == Qt.MouseButton.LeftButton:
             if event.position().y() < 30:
+                return
+
+            track_idx = self.get_track_at_y(event.position().y())
+            if track_idx is None:
                 return
 
             self.is_selecting = True
             time = self.x_to_time(event.position().x())
             self.selection_start = time
             self.selection_end = time
+            self.selection_tracks = {track_idx}
             self.update()
 
     def mouseMoveEvent(self, event):
@@ -372,10 +422,19 @@ class WaveformWidget(QWidget):
         ----------
         event : QMouseEvent
             mouse event details
+
+        Notes
+        -----
+        Expands selection to include tracks the mouse moves into.
         """
         if self.is_selecting:
             time = self.x_to_time(event.position().x())
             self.selection_end = time
+
+            track_idx = self.get_track_at_y(event.position().y())
+            if track_idx is not None:
+                self.selection_tracks.add(track_idx)
+
             self.update()
 
     def mouseReleaseEvent(self, event):
@@ -541,12 +600,12 @@ class WaveformWidget(QWidget):
 
     def get_selection(self):
         """
-        Get current selection time range.
+        Get current selection time range and affected tracks.
 
         Returns
         -------
-        tuple of float or None
-            (start_time, end_time) in seconds, or None if no valid selection
+        tuple or None
+            ((start_time, end_time), set of track indices), or None if no valid selection
 
         Notes
         -----
@@ -554,14 +613,16 @@ class WaveformWidget(QWidget):
         """
         if self.selection_start is not None and self.selection_end is not None:
             if abs(self.selection_end - self.selection_start) > 0.001:
-                return (min(self.selection_start, self.selection_end),
-                        max(self.selection_start, self.selection_end))
+                return ((min(self.selection_start, self.selection_end),
+                         max(self.selection_start, self.selection_end)),
+                        self.selection_tracks.copy())
         return None
 
     def clear_selection(self):
         """Clear the current selection and update display."""
         self.selection_start = None
         self.selection_end = None
+        self.selection_tracks = set()
         self.update()
 
     def set_playback_position(self, position):

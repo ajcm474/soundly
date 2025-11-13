@@ -628,18 +628,25 @@ impl AudioEngine
         }
     }
 
-    /// Delete a region of audio from all tracks
+    /// Delete a region of audio from specified tracks
     ///
     /// # Parameters
     /// * `start_time` - start of region in seconds
     /// * `end_time` - end of region in seconds
+    /// * `track_indices` - slice of track indices to delete from
     ///
     /// # Returns
     /// `Result<(), String>` - Ok if successful
-    pub fn delete_region(&mut self, start_time: f64, end_time: f64) -> Result<(), String>
+    pub fn delete_region(&mut self, start_time: f64, end_time: f64, track_indices: &[usize]) -> Result<(), String>
     {
-        for track in &mut self.tracks
+        for &track_idx in track_indices
         {
+            if track_idx >= self.tracks.len()
+            {
+                continue;
+            }
+
+            let track = &mut self.tracks[track_idx];
             let start_frame = (start_time * track.sample_rate as f64) as usize;
             let end_frame = (end_time * track.sample_rate as f64) as usize;
 

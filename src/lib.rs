@@ -193,23 +193,24 @@ impl AudioEditor
         Ok(())
     }
 
-    /// Delete a region of audio from all tracks
+    /// Delete a region of audio from specified tracks
     ///
     /// # Parameters
     /// * `start_time` - start of region in seconds
     /// * `end_time` - end of region in seconds
+    /// * `track_indices` - list of track indices to delete from
     ///
     /// # Returns
     /// `PyResult<()>` - Ok if successful
     ///
     /// # Errors
     /// Returns error if region is invalid
-    fn delete_region(&mut self, start_time: f64, end_time: f64) -> PyResult<()>
+    fn delete_region(&mut self, start_time: f64, end_time: f64, track_indices: Vec<usize>) -> PyResult<()>
     {
         self.engine
             .lock()
             .unwrap()
-            .delete_region(start_time, end_time)
+            .delete_region(start_time, end_time, &track_indices)
             .map_err(|e| PyRuntimeError::new_err(format!("Delete error: {}", e)))
     }
 

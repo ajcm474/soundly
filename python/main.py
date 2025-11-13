@@ -448,7 +448,7 @@ class AudioEditorWindow(QMainWindow):
 
     def delete_region(self):
         """
-        Delete the currently selected audio region from all tracks.
+        Delete the currently selected audio region from selected tracks only.
 
         Positions the playback cursor at the start of the deleted region
         and updates the waveform display.
@@ -456,15 +456,16 @@ class AudioEditorWindow(QMainWindow):
         selection = self.waveform.get_selection()
         if selection:
             try:
-                start, end = selection
-                self.engine.delete_region(start, end)
+                (start, end), track_indices = selection
+                self.engine.delete_region(start, end, list(track_indices))
                 self.waveform.clear_selection()
 
                 self.engine.set_playback_position(start)
                 self.waveform.set_playback_position(start)
 
                 self.update_waveform()
-                self.statusBar().showMessage(f'Deleted region: {start:.2f}s - {end:.2f}s')
+                track_str = ", ".join(str(i + 1) for i in sorted(track_indices))
+                self.statusBar().showMessage(f'Deleted region: {start:.2f}s - {end:.2f}s from track(s) {track_str}')
             except Exception as e:
                 QMessageBox.critical(self, 'Error', f'Delete error: {str(e)}')
 
