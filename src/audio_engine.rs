@@ -460,8 +460,8 @@ impl AudioEngine
     /// `(Vec<f32>, u32, usize)` - mixed audio data, sample rate, and channel count
     ///
     /// # Notes
-    /// Converts all tracks to stereo and mixes them together. Uses the sample rate
-    /// of the first track.
+    /// Preserves mono if all tracks are mono, otherwise converts to stereo.
+    /// Uses the sample rate of the first track.
     fn mix_tracks_for_playback(&self, start_time: f64, end_time: f64) -> (Vec<f32>, u32, usize)
     {
         if self.tracks.is_empty()
@@ -470,7 +470,8 @@ impl AudioEngine
         }
 
         let sample_rate = self.tracks[0].sample_rate;
-        let output_channels = 2;
+        let has_stereo = self.tracks.iter().any(|t| t.channels == 2);
+        let output_channels = if has_stereo { 2 } else { 1 };
 
         let start_frame = (start_time * sample_rate as f64) as usize;
         let end_frame = (end_time * sample_rate as f64) as usize;
@@ -481,39 +482,41 @@ impl AudioEngine
         for track in &self.tracks
         {
             let track_start_frame = (start_time * track.sample_rate as f64) as usize;
-            let track_end_frame = (end_time * track.sample_rate as f64) as usize;
 
             for frame_idx in 0..total_frames
             {
                 let track_frame = track_start_frame + frame_idx;
                 let output_idx = frame_idx * output_channels;
 
-                if track.channels == 2
+                if output_channels == 2
                 {
-                    let track_idx = track_frame * 2;
-                    if track_idx + 1 < track.audio_data.len()
+                    if track.channels == 2
                     {
-                        mixed_data[output_idx] += track.audio_data[track_idx];
-                        mixed_data[output_idx + 1] += track.audio_data[track_idx + 1];
+                        let track_idx = track_frame * 2;
+                        if track_idx + 1 < track.audio_data.len()
+                        {
+                            mixed_data[output_idx] += track.audio_data[track_idx];
+                            mixed_data[output_idx + 1] += track.audio_data[track_idx + 1];
+                        }
                     }
-                }
-                else if track.channels == 1
-                {
-                    if track_frame < track.audio_data.len()
+                    else if track.channels == 1
                     {
-                        let sample = track.audio_data[track_frame];
-                        mixed_data[output_idx] += sample;
-                        mixed_data[output_idx + 1] += sample;
+                        if track_frame < track.audio_data.len()
+                        {
+                            let sample = track.audio_data[track_frame];
+                            mixed_data[output_idx] += sample;
+                            mixed_data[output_idx + 1] += sample;
+                        }
                     }
                 }
                 else
                 {
-                    let track_idx = track_frame * track.channels;
-                    if track_idx < track.audio_data.len()
+                    if track.channels == 1
                     {
-                        let sample = track.audio_data[track_idx];
-                        mixed_data[output_idx] += sample;
-                        mixed_data[output_idx + 1] += sample;
+                        if track_frame < track.audio_data.len()
+                        {
+                            mixed_data[output_idx] += track.audio_data[track_frame];
+                        }
                     }
                 }
             }
@@ -525,6 +528,147 @@ impl AudioEngine
         }
 
         (mixed_data, sample_rate, output_channels)
+    }
+
+    /// Mix tracks with specific channel mode for export
+    ///
+    /// # Parameters
+    /// * `start_time` - start time in seconds
+    /// * `end_time` - end time in seconds
+    /// * `channel_mode` - channel configuration mode
+    ///
+    /// # Returns
+    /// `Vec<(Vec<f32>, u32, usize, String)>` - list of (audio data, sample rate, channels, suffix)
+    ///
+    /// # Notes
+    /// Returns multiple results for split mode, single result otherwise
+    fn mix_tracks_for_export(&self, start_time: f64, end_time: f64, channel_mode: &str) -> Vec<(Vec<f32>, u32, usize, String)>
+    {
+        if self.tracks.is_empty()
+        {
+            return vec![(Vec::new(), 44100, 2, String::new())];
+        }
+
+        let sample_rate = self.tracks[0].sample_rate;
+        let start_frame = (start_time * sample_rate as f64) as usize;
+        let end_frame = (end_time * sample_rate as f64) as usize;
+        let total_frames = end_frame - start_frame;
+
+        match channel_mode
+        {
+            "split" =>
+            {
+                let mut results = Vec::new();
+                for track in &self.tracks
+                {
+                    if track.channels == 2
+                    {
+                        let track_start_frame = (start_time * track.sample_rate as f64) as usize;
+                        let mut left_data = Vec::with_capacity(total_frames);
+                        let mut right_data = Vec::with_capacity(total_frames);
+
+                        for frame_idx in 0..total_frames
+                        {
+                            let track_frame = track_start_frame + frame_idx;
+                            let track_idx = track_frame * 2;
+                            if track_idx + 1 < track.audio_data.len()
+                            {
+                                left_data.push(track.audio_data[track_idx]);
+                                right_data.push(track.audio_data[track_idx + 1]);
+                            }
+                            else
+                            {
+                                left_data.push(0.0);
+                                right_data.push(0.0);
+                            }
+                        }
+
+                        results.push((left_data, sample_rate, 1, "_L".to_string()));
+                        results.push((right_data, sample_rate, 1, "_R".to_string()));
+                    }
+                }
+                if results.is_empty()
+                {
+                    results.push((Vec::new(), sample_rate, 1, String::new()));
+                }
+                results
+            }
+            "mono_to_stereo" =>
+            {
+                let mut stereo_data = vec![0.0f32; total_frames * 2];
+
+                let mono_tracks: Vec<&AudioTrack> = self.tracks.iter().filter(|t| t.channels == 1).collect();
+
+                if mono_tracks.len() >= 2
+                {
+                    let left_track = mono_tracks[0];
+                    let right_track = mono_tracks[1];
+
+                    let left_start = (start_time * left_track.sample_rate as f64) as usize;
+                    let right_start = (start_time * right_track.sample_rate as f64) as usize;
+
+                    for frame_idx in 0..total_frames
+                    {
+                        let output_idx = frame_idx * 2;
+
+                        if left_start + frame_idx < left_track.audio_data.len()
+                        {
+                            stereo_data[output_idx] = left_track.audio_data[left_start + frame_idx];
+                        }
+
+                        if right_start + frame_idx < right_track.audio_data.len()
+                        {
+                            stereo_data[output_idx + 1] = right_track.audio_data[right_start + frame_idx];
+                        }
+                    }
+                }
+
+                vec![(stereo_data, sample_rate, 2, String::new())]
+            }
+            "mono" =>
+            {
+                let mut mono_data = vec![0.0f32; total_frames];
+
+                for track in &self.tracks
+                {
+                    let track_start_frame = (start_time * track.sample_rate as f64) as usize;
+
+                    for frame_idx in 0..total_frames
+                    {
+                        let track_frame = track_start_frame + frame_idx;
+
+                        if track.channels == 2
+                        {
+                            let track_idx = track_frame * 2;
+                            if track_idx + 1 < track.audio_data.len()
+                            {
+                                let mono_sample = (track.audio_data[track_idx] + track.audio_data[track_idx + 1]) / 2.0;
+                                mono_data[frame_idx] += mono_sample;
+                            }
+                        }
+                        else if track.channels == 1
+                        {
+                            if track_frame < track.audio_data.len()
+                            {
+                                mono_data[frame_idx] += track.audio_data[track_frame];
+                            }
+                        }
+                    }
+                }
+
+                for sample in &mut mono_data
+                {
+                    *sample = sample.clamp(-1.0, 1.0);
+                }
+
+                vec![(mono_data, sample_rate, 1, String::new())]
+            }
+            _ =>
+            {
+                let (data, rate, channels) = self.mix_tracks_for_playback(start_time, end_time);
+                vec![(data, rate, channels, String::new())]
+            }
+        }
     }
 
     /// Start audio playback
@@ -665,7 +809,7 @@ impl AudioEngine
         Ok(())
     }
 
-    /// Export mixed audio to a file
+    /// Export audio to a file
     ///
     /// # Parameters
     /// * `path` - output file path with extension (.wav, .flac, or .mp3)
@@ -673,37 +817,70 @@ impl AudioEngine
     /// * `end_time` - optional end time in seconds (None for end)
     /// * `compression_level` - optional FLAC compression level 0-8 (None for default 5)
     /// * `bitrate_kbps` - optional MP3 bitrate in kbps (None for default 192)
+    /// * `channel_mode` - optional channel mode ('stereo', 'mono', 'split', 'mono_to_stereo')
     ///
     /// # Returns
     /// `Result<(), String>` - Ok if successful
     ///
     /// # Notes
     /// Format is determined by file extension. All tracks are mixed together for export.
+    /// Split mode creates multiple files with _L and _R suffixes.
     pub fn export_audio(&self, path: &str, start_time: Option<f64>, end_time: Option<f64>,
-                        compression_level: Option<u8>, bitrate_kbps: Option<u32>) -> Result<(), String>
+                        compression_level: Option<u8>, bitrate_kbps: Option<u32>,
+                        channel_mode: Option<String>) -> Result<(), String>
     {
         let duration = self.get_duration();
         let start = start_time.unwrap_or(0.0);
         let end = end_time.unwrap_or(duration);
 
-        let (export_data, sample_rate, channels) = self.mix_tracks_for_playback(start, end);
-
-        let path_lower = path.to_lowercase();
-        if path_lower.ends_with(".wav")
+        let mode = channel_mode.as_deref().unwrap_or("auto");
+        let export_items = if mode == "auto"
         {
-            self.export_wav(path, &export_data, sample_rate, channels)?;
-        }
-        else if path_lower.ends_with(".flac")
-        {
-            self.export_flac(path, &export_data, sample_rate, channels, compression_level.unwrap_or(5))?;
-        }
-        else if path_lower.ends_with(".mp3")
-        {
-            self.export_mp3(path, &export_data, sample_rate, channels, bitrate_kbps.unwrap_or(192))?;
+            let (data, rate, channels) = self.mix_tracks_for_playback(start, end);
+            vec![(data, rate, channels, String::new())]
         }
         else
         {
-            return Err("Unsupported format. Use .wav, .flac, or .mp3".to_string());
+            self.mix_tracks_for_export(start, end, mode)
+        };
+
+        let path_lower = path.to_lowercase();
+        let (base_path, extension) = if let Some(pos) = path.rfind('.')
+        {
+            (&path[..pos], &path[pos..])
+        }
+        else
+        {
+            (path, "")
+        };
+
+        for (export_data, sample_rate, channels, suffix) in export_items
+        {
+            let final_path = if suffix.is_empty()
+            {
+                path.to_string()
+            }
+            else
+            {
+                format!("{}{}{}", base_path, suffix, extension)
+            };
+
+            if path_lower.ends_with(".wav")
+            {
+                self.export_wav(&final_path, &export_data, sample_rate, channels)?;
+            }
+            else if path_lower.ends_with(".flac")
+            {
+                self.export_flac(&final_path, &export_data, sample_rate, channels, compression_level.unwrap_or(5))?;
+            }
+            else if path_lower.ends_with(".mp3")
+            {
+                self.export_mp3(&final_path, &export_data, sample_rate, channels, bitrate_kbps.unwrap_or(192))?;
+            }
+            else
+            {
+                return Err("Unsupported format. Use .wav, .flac, or .mp3".to_string());
+            }
         }
 
         Ok(())

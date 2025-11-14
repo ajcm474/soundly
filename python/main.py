@@ -92,6 +92,84 @@ class ExportDialog(QDialog):
         return None
 
 
+class ChannelExportDialog(QDialog):
+    """Dialog for configuring channel export options."""
+
+    def __init__(self, parent=None, has_stereo=False, num_mono=0):
+        """
+        Initialize the channel export dialog.
+
+        Parameters
+        ----------
+        parent : QWidget, optional
+            parent widget
+        has_stereo : bool
+            whether any stereo tracks are loaded
+        num_mono : int
+            number of mono tracks loaded
+        """
+        super().__init__(parent)
+        self.setWindowTitle("Channel Options")
+        self.setModal(True)
+
+        layout = QVBoxLayout()
+
+        layout.addWidget(QLabel("Output Channel Configuration:"))
+        self.channel_combo = QComboBox()
+
+        if has_stereo and num_mono == 0:
+            self.channel_combo.addItems([
+                "Stereo (keep as-is)",
+                "Mono (mix down)",
+                "Split to separate mono files"
+            ])
+        elif has_stereo and num_mono > 0:
+            self.channel_combo.addItems([
+                "Stereo (mix all)",
+                "Mono (mix down all)",
+            ])
+        elif num_mono >= 2:
+            self.channel_combo.addItems([
+                "Mono (mix all)",
+                "Stereo (first two tracks as L/R)",
+            ])
+        else:
+            self.channel_combo.addItems([
+                "Mono (keep as-is)",
+            ])
+
+        layout.addWidget(self.channel_combo)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok |
+            QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self.setLayout(layout)
+
+    def get_channel_mode(self):
+        """
+        Get selected channel export mode.
+
+        Returns
+        -------
+        str
+            channel mode identifier ('stereo', 'mono', 'split', 'mono_to_stereo')
+        """
+        text = self.channel_combo.currentText().lower()
+        if "split" in text:
+            return "split"
+        elif "stereo" in text and "first two" in text:
+            return "mono_to_stereo"
+        elif "stereo" in text:
+            return "stereo"
+        else:
+            return "mono"
+
+
 class AudioEditorWindow(QMainWindow):
     """Main application window for the audio editor."""
 
@@ -314,7 +392,7 @@ class AudioEditorWindow(QMainWindow):
             current_pos = self.engine.get_playback_position()
 
             if selection:
-                start, end = selection
+                (start, end), track_indices = selection
                 if current_pos < start or current_pos >= end:
                     self.engine.stop()
                     self.engine.play(start, end)
@@ -364,20 +442,17 @@ class AudioEditorWindow(QMainWindow):
             if self.engine.is_playing():
                 self.pause()
             else:
-                # when resuming, check if we need to restart
                 position = self.engine.get_playback_position()
                 selection = self.waveform.get_selection()
 
                 if selection:
-                    start, end = selection
-                    # if we're at the end of selection, restart from beginning
+                    (start, end), track_indices = selection
                     if position >= end:
                         self.engine.stop()
                         self.engine.play(start, end)
                     else:
                         self.play()
                 else:
-                    # if we're at the end of file, restart from beginning
                     duration = self.engine.get_duration()
                     if position >= duration:
                         self.engine.stop()
@@ -430,7 +505,7 @@ class AudioEditorWindow(QMainWindow):
                 duration = self.engine.get_duration()
 
                 if selection:
-                    start, end = selection
+                    (start, end), track_indices = selection
                     should_repeat = self._handle_playback_end(selection, position, end)
                     if should_repeat:
                         self.engine.stop()
@@ -499,6 +574,16 @@ class AudioEditorWindow(QMainWindow):
                 elif file_type == 'mp3':
                     bitrate = dialog.get_bitrate()
 
+            track_info = self.engine.get_track_info()
+            has_stereo = any(info[2] == 2 for info in track_info)
+            num_mono = sum(1 for info in track_info if info[2] == 1)
+
+            if has_stereo or num_mono >= 2:
+                channel_dialog = ChannelExportDialog(self, has_stereo, num_mono)
+                if channel_dialog.exec() != QDialog.DialogCode.Accepted:
+                    return
+                channel_mode = channel_dialog.get_channel_mode()
+
             filter_map = {
                 'wav': "WAV Files (*.wav)",
                 'flac': "FLAC Files (*.flac)",
@@ -522,13 +607,12 @@ class AudioEditorWindow(QMainWindow):
 
             selection = self.waveform.get_selection()
             if selection:
-                start, end = selection
-                self.engine.export_audio(file_path, start, end, compression_level, bitrate)
+                (start, end), track_indices = selection
+                self.engine.export_audio(file_path, start, end, compression_level, bitrate, channel_mode)
                 self.statusBar().showMessage(f'Exported selection: {file_path}')
             else:
-                # export entire file when no selection
                 self.engine.export_audio(file_path, 0.0, self.engine.get_duration(),
-                                         compression_level, bitrate)
+                                         compression_level, bitrate, channel_mode)
                 self.statusBar().showMessage(f'Exported entire file: {file_path}')
 
         except Exception as e:

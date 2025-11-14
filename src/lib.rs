@@ -222,20 +222,22 @@ impl AudioEditor
     /// * `end_time` - optional end time in seconds (None for end)
     /// * `compression_level` - optional FLAC compression level 0-8 (None for default 5)
     /// * `bitrate_kbps` - optional MP3 bitrate in kbps (None for default 192)
+    /// * `channel_mode` - optional channel mode ('stereo', 'mono', 'split', 'mono_to_stereo')
     ///
     /// # Returns
     /// `PyResult<()>` - Ok if successful
     ///
     /// # Errors
     /// Returns error if export fails or format is unsupported
-    #[pyo3(signature = (path, start_time=None, end_time=None, compression_level=None, bitrate_kbps=None))]
+    #[pyo3(signature = (path, start_time=None, end_time=None, compression_level=None, bitrate_kbps=None, channel_mode=None))]
     fn export_audio(&self, path: String, start_time: Option<f64>, end_time: Option<f64>,
-                    compression_level: Option<u8>, bitrate_kbps: Option<u32>) -> PyResult<()>
+                    compression_level: Option<u8>, bitrate_kbps: Option<u32>,
+                    channel_mode: Option<String>) -> PyResult<()>
     {
         self.engine
             .lock()
             .unwrap()
-            .export_audio(&path, start_time, end_time, compression_level, bitrate_kbps)
+            .export_audio(&path, start_time, end_time, compression_level, bitrate_kbps, channel_mode)
             .map_err(|e| PyRuntimeError::new_err(format!("Export error: {}", e)))
     }
 }
