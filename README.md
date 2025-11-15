@@ -9,6 +9,7 @@ featuring real-time waveform visualization and support for multiple audio format
 - **Playback controls**: Play, pause, repeat, and navigate through audio
 - **High-quality export**: Configurable compression for FLAC (0-8) and bitrate for MP3 (128-320 kbps)
 - **Pure Rust FLAC encoder**: Custom implementation based on RFC 9639
+- **Multi-track support**: View, playback, and export multiple tracks, differentiated by color
 
 ## Building
 
@@ -76,7 +77,6 @@ python python/main.py
 
 ## Current Limitations
 - **Undo/Redo**: Not yet implemented - edits are permanent
-- **Multi-track**: Single track only (stereo or mono)
 - **Effects**: No audio effects or filters currently available
 - **Selection precision**: Minimum selection size is 1ms
 - **FLAC encoder**: Custom implementation supports compression levels 0-8 but may be less efficient
