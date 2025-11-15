@@ -355,15 +355,8 @@ class AudioEditorWindow(QMainWindow):
             if duration == 0:
                 return
 
-            try:
-                channels = self.engine.get_channels()
-            except:
-                channels = 2
-
-            try:
-                track_info = self.engine.get_track_info()
-            except:
-                track_info = []
+            channels = self.engine.get_channels()
+            track_info = self.engine.get_track_info()
 
             width = self.waveform.width()
             if width <= 0:
@@ -399,7 +392,7 @@ class AudioEditorWindow(QMainWindow):
                 else:
                     self.engine.play(None, None)
             else:
-                if current_pos > 0 and current_pos < self.engine.get_duration():
+                if 0 < current_pos < self.engine.get_duration():
                     self.engine.play(None, None)
                 else:
                     self.engine.stop()

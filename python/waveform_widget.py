@@ -102,6 +102,11 @@ class WaveformWidget(QWidget):
 
         self.update()
 
+    def _update_parent_waveform(self):
+        parent = self.parent()
+        if parent and hasattr(parent.parent(), 'update_waveform'):
+            parent.parent().update_waveform()
+
     def get_track_at_y(self, y):
         """
         Determine which track is at the given y coordinate.
@@ -142,7 +147,7 @@ class WaveformWidget(QWidget):
 
         # ensure we don't go past the end
         if self.view_start_time + visible_duration > self.duration:
-            self.view_start_time = max(0, self.duration - visible_duration)
+            self.view_start_time = max(0.0, self.duration - visible_duration)
 
         self.view_end_time = min(self.view_start_time + visible_duration, self.duration)
 
@@ -194,19 +199,22 @@ class WaveformWidget(QWidget):
 
         track_height = waveform_height / num_tracks
 
-        # alternate colors for different tracks
+        # alternate colors to differentiate tracks visually
         track_colors = [
-            QColor(100, 200, 255),
-            QColor(255, 150, 100),
-            QColor(150, 255, 100),
-            QColor(255, 100, 255),
-            QColor(255, 255, 100),
+            QColor(100, 200, 255),      # light blue
+            QColor(255, 150, 100),      # orange
+            QColor(150, 255, 100),      # lime green
+            QColor(255, 100, 255),      # pink
+            QColor(255, 255, 100),      # yellow
         ]
 
+        # draw each track
         for track_idx, track_data in enumerate(self.waveform_data):
             track_y_offset = track_idx * track_height
             track_color = track_colors[track_idx % len(track_colors)]
 
+            # if there's a selection and the selection is visible,
+            # draw translucent selection box on the selected tracks
             if self.selection_start is not None and self.selection_end is not None:
                 if track_idx in self.selection_tracks:
                     sel_start = min(self.selection_start, self.selection_end)
@@ -218,20 +226,22 @@ class WaveformWidget(QWidget):
                         painter.fillRect(QRectF(start_x, track_y_offset, end_x - start_x, track_height),
                                          QColor(100, 150, 255, 80))
 
+            # draw grey barrier between tracks
             if track_idx > 0:
                 painter.setPen(QPen(QColor(100, 100, 100), 2))
                 painter.drawLine(0, int(track_y_offset), width, int(track_y_offset))
 
-            track_duration = 0.0
-            track_channels = 2
             if track_idx < len(self.track_info):
                 info = self.track_info[track_idx]
                 track_duration = info[3]
                 track_channels = info[2]
                 label = f"{info[0]} ({info[1]}Hz, {'Stereo' if info[2] == 2 else 'Mono'})"
             else:
+                track_duration = 0.0
+                track_channels = 2
                 label = f"Track {track_idx + 1}"
 
+            # overlay silver track label in upper left corner of track
             painter.setPen(QPen(QColor(200, 200, 200), 1))
             font = painter.font()
             font.setPointSize(9)
@@ -247,16 +257,19 @@ class WaveformWidget(QWidget):
 
             if is_stereo:
                 channel_height = track_height / 2
+                half_channel_height = channel_height / 2
+                channel_height_plus_half = channel_height + half_channel_height
+                channel_height_45percent = channel_height * 0.45
 
                 painter.setPen(QPen(QColor(60, 60, 60), 1))
-                painter.drawLine(0, int(track_y_offset + channel_height / 2),
-                                 width, int(track_y_offset + channel_height / 2))
-                painter.drawLine(0, int(track_y_offset + channel_height + channel_height / 2),
-                                 width, int(track_y_offset + channel_height + channel_height / 2))
+                painter.drawLine(0, int(track_y_offset + half_channel_height),
+                                 width, int(track_y_offset + half_channel_height))
+                painter.drawLine(0, int(track_y_offset + channel_height_plus_half),
+                                 width, int(track_y_offset + channel_height_plus_half))
 
                 painter.setPen(QPen(QColor(120, 120, 120), 1))
-                painter.drawText(5, int(track_y_offset + channel_height / 2 + 5), "L")
-                painter.drawText(5, int(track_y_offset + channel_height + channel_height / 2 + 5), "R")
+                painter.drawText(5, int(track_y_offset + half_channel_height + 5), "L")
+                painter.drawText(5, int(track_y_offset + channel_height_plus_half + 5), "R")
 
                 painter.setPen(QPen(track_color, 1))
 
@@ -264,22 +277,23 @@ class WaveformWidget(QWidget):
                     if i >= len(track_data):
                         break
 
-                    sample_time = self.view_start_time + (i / total_samples) * visible_duration
+                    sample_time = self.view_start_time + ((i / total_samples) * visible_duration)
                     if sample_time > track_duration:
                         break
 
                     x = (i / total_samples) * width
                     min_l, max_l, min_r, max_r = track_data[i]
 
-                    y_min_l = track_y_offset + (channel_height / 2) - (min_l * channel_height * 0.45)
-                    y_max_l = track_y_offset + (channel_height / 2) - (max_l * channel_height * 0.45)
+                    y_min_l = track_y_offset + half_channel_height - (min_l * channel_height_45percent)
+                    y_max_l = track_y_offset + half_channel_height - (max_l * channel_height_45percent)
                     painter.drawLine(QPointF(x, y_min_l), QPointF(x, y_max_l))
 
-                    y_min_r = track_y_offset + channel_height + (channel_height / 2) - (min_r * channel_height * 0.45)
-                    y_max_r = track_y_offset + channel_height + (channel_height / 2) - (max_r * channel_height * 0.45)
+                    y_min_r = track_y_offset + channel_height_plus_half - (min_r * channel_height_45percent)
+                    y_max_r = track_y_offset + channel_height_plus_half - (max_r * channel_height_45percent)
                     painter.drawLine(QPointF(x, y_min_r), QPointF(x, y_max_r))
             else:
                 center_y = track_y_offset + track_height / 2
+                track_height_45percent = track_height * 0.45
 
                 painter.setPen(QPen(QColor(60, 60, 60), 1))
                 painter.drawLine(0, int(center_y), width, int(center_y))
@@ -297,8 +311,8 @@ class WaveformWidget(QWidget):
                     x = (i / total_samples) * width
                     min_val, max_val = track_data[i][:2]
 
-                    y_min = center_y - (min_val * track_height * 0.45)
-                    y_max = center_y - (max_val * track_height * 0.45)
+                    y_min = center_y - (min_val * track_height_45percent)
+                    y_max = center_y - (max_val * track_height_45percent)
 
                     painter.drawLine(QPointF(x, y_min), QPointF(x, y_max))
 
@@ -460,14 +474,13 @@ class WaveformWidget(QWidget):
             maximum zoom level to keep at least 100 samples visible
         """
         max_zoom = 10000.0
+
         if hasattr(self.parent().parent(), 'engine'):
-            try:
-                sample_rate = self.parent().parent().engine.get_sample_rate()
-                duration = self.parent().parent().engine.get_duration()
-                total_samples = sample_rate * duration
-                max_zoom = total_samples / 100
-            except:
-                pass
+            sample_rate = self.parent().parent().engine.get_sample_rate()
+            duration = self.parent().parent().engine.get_duration()
+            total_samples = sample_rate * duration
+            max_zoom = total_samples / 100
+
         return max_zoom
 
     def _update_view_for_zoom(self, center_time, new_zoom):
@@ -490,18 +503,31 @@ class WaveformWidget(QWidget):
 
         visible_duration = self.duration / new_zoom
 
-        self.view_start_time = center_time - visible_duration / 2
-        self.view_start_time = max(0, self.view_start_time)
+        self.view_start_time = max(0.0, center_time - visible_duration / 2)
         self.view_end_time = min(self.duration, self.view_start_time + visible_duration)
 
         # adjust if we hit the end
         if self.view_end_time >= self.duration:
             self.view_end_time = self.duration
-            self.view_start_time = max(0, self.duration - visible_duration)
+            self.view_start_time = max(0.0, self.duration - visible_duration)
 
-        parent = self.parent()
-        if parent and hasattr(parent.parent(), 'update_waveform'):
-            parent.parent().update_waveform()
+        self._update_parent_waveform()
+
+    def _center_on_mouse_position(self, event):
+        """
+        Center the zoom on the mouse position
+
+        Parameters
+        ----------
+        event : QWheelEvent
+            wheel event details
+        """
+        mouse_time = self.x_to_time(event.position().x())
+        mouse_frac = event.position().x() / self.width()
+        visible_duration = self.duration / self.zoom_level
+
+        self.view_start_time = max(0, mouse_time - (mouse_frac * visible_duration))
+        self.view_end_time = min(self.duration, self.view_start_time + visible_duration)
 
     def wheelEvent(self, event):
         """
@@ -518,29 +544,21 @@ class WaveformWidget(QWidget):
         maximum zoom based on sample rate to prevent zooming beyond
         individual samples.
         """
-        mouse_time = self.x_to_time(event.position().x())
         max_zoom = self._get_max_zoom()
+        old_zoom = self.zoom_level
 
         delta = event.angleDelta().y()
+
         if delta > 0:
             # zoom in
-            old_zoom = self.zoom_level
             self.zoom_level = min(max_zoom, self.zoom_level * 1.2)
 
             if self.zoom_level != old_zoom and self.duration > 0:
-                visible_duration = self.duration / self.zoom_level
+                self._center_on_mouse_position(event)
+                self._update_parent_waveform()
 
-                # center on mouse position
-                self.view_start_time = mouse_time - (event.position().x() / self.width()) * visible_duration
-                self.view_start_time = max(0, self.view_start_time)
-                self.view_end_time = min(self.duration, self.view_start_time + visible_duration)
-
-                parent = self.parent()
-                if parent and hasattr(parent.parent(), 'update_waveform'):
-                    parent.parent().update_waveform()
         elif delta < 0:
             # zoom out
-            old_zoom = self.zoom_level
             self.zoom_level = max(1.0, self.zoom_level / 1.2)
 
             if self.zoom_level != old_zoom and self.duration > 0:
@@ -548,16 +566,9 @@ class WaveformWidget(QWidget):
                     self.view_start_time = 0.0
                     self.view_end_time = self.duration
                 else:
-                    visible_duration = self.duration / self.zoom_level
+                    self._center_on_mouse_position(event)
 
-                    # try to keep mouse position stable
-                    self.view_start_time = mouse_time - (event.position().x() / self.width()) * visible_duration
-                    self.view_start_time = max(0, self.view_start_time)
-                    self.view_end_time = min(self.duration, self.view_start_time + visible_duration)
-
-                parent = self.parent()
-                if parent and hasattr(parent.parent(), 'update_waveform'):
-                    parent.parent().update_waveform()
+                self._update_parent_waveform()
 
         event.accept()
 
@@ -612,11 +623,14 @@ class WaveformWidget(QWidget):
         -----
         Minimum selection size is 1ms to prevent accidental point selections.
         """
-        if self.selection_start is not None and self.selection_end is not None:
-            if abs(self.selection_end - self.selection_start) > 0.001:
-                return ((min(self.selection_start, self.selection_end),
-                         max(self.selection_start, self.selection_end)),
-                        self.selection_tracks.copy())
+        if (
+            self.selection_start is not None and
+            self.selection_end is not None and
+            abs(self.selection_end - self.selection_start) > 0.001
+        ):
+            return ((min(self.selection_start, self.selection_end),
+                     max(self.selection_start, self.selection_end)),
+                    self.selection_tracks.copy())
         return None
 
     def clear_selection(self):
@@ -644,24 +658,22 @@ class WaveformWidget(QWidget):
 
         if self.auto_scroll and self.zoom_level > 1.0:
             visible_duration = self.duration / self.zoom_level
+            needs_parent_update = False
 
-            # scroll when approaching right edge
+            # scroll right when approaching right edge
             if position > self.view_start_time + visible_duration * 0.9:
                 new_start = position - visible_duration * 0.1
-                self.view_start_time = max(0, min(new_start, self.duration - visible_duration))
-                self.view_end_time = self.view_start_time + visible_duration
+                self.view_start_time = max(0.0, min(new_start, self.duration - visible_duration))
+                needs_parent_update = True
 
-                parent = self.parent()
-                if parent and hasattr(parent.parent(), 'update_waveform'):
-                    parent.parent().update_waveform()
-
+            # scroll left when playback should start before current view
             elif position < self.view_start_time:
-                self.view_start_time = max(0, position)
-                self.view_end_time = self.view_start_time + visible_duration
+                self.view_start_time = max(0.0, position)
+                needs_parent_update = True
 
-                parent = self.parent()
-                if parent and hasattr(parent.parent(), 'update_waveform'):
-                    parent.parent().update_waveform()
+            if needs_parent_update:
+                self.view_end_time = self.view_start_time + visible_duration
+                self._update_parent_waveform()
 
         self.update()
 
@@ -686,7 +698,7 @@ class WaveformWidget(QWidget):
         if self.zoom_level != old_zoom and self.duration > 0:
             selection = self.get_selection()
             if selection:
-                sel_start, sel_end = selection
+                sel_start, sel_end = selection[0]
                 center_time = (sel_start + sel_end) / 2
             else:
                 center_time = (self.view_start_time + self.view_end_time) / 2
@@ -709,9 +721,7 @@ class WaveformWidget(QWidget):
                 # show entire waveform
                 self.view_start_time = 0.0
                 self.view_end_time = self.duration
-                parent = self.parent()
-                if parent and hasattr(parent.parent(), 'update_waveform'):
-                    parent.parent().update_waveform()
+                self._update_parent_waveform()
             else:
                 # try to keep the current center
                 center_time = (self.view_start_time + self.view_end_time) / 2
