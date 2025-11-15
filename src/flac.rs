@@ -222,7 +222,7 @@ impl MD5Context
        }
 
         // apply F function 16 times with different message words and constants
-        // constants ($ac values) are derived from sine function: floor(2^32 * abs(sin(i)))
+        // $ac values are derived from sine function: floor(2^32 * abs(sin(i)))
         ff!(a, b, c, d, x[0], 7, 0xD76AA478);
         ff!(d, a, b, c, x[1], 12, 0xE8C7B756);
         ff!(c, d, a, b, x[2], 17, 0x242070DB);
@@ -675,7 +675,7 @@ fn apply_fixed_predictor(samples: &[i32], order: usize) -> Vec<i32>
     residual
 }
 
-/// Calculate best Rice parameter for a partition
+/// Calculate the best Rice parameter for a partition
 ///
 /// # Parameters
 /// * `residual` - residual values to analyze

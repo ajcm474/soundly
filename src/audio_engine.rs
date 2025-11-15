@@ -156,6 +156,7 @@ impl AudioEngine
         {
             AudioBufferRef::F32(buf) =>
             {
+                // pass through f32 samples as is
                 for frame in 0..buf.frames()
                 {
                     for ch in 0..channels.min(buf.spec().channels.count())
@@ -166,6 +167,7 @@ impl AudioEngine
             }
             AudioBufferRef::S32(buf) =>
             {
+                // convert signed 32-bit integer samples to f32
                 for frame in 0..buf.frames()
                 {
                     for ch in 0..channels.min(buf.spec().channels.count())
@@ -176,6 +178,7 @@ impl AudioEngine
             }
             AudioBufferRef::S16(buf) =>
             {
+                // convert signed 16-bit integer samples to f32
                 for frame in 0..buf.frames()
                 {
                     for ch in 0..channels.min(buf.spec().channels.count())
@@ -318,6 +321,8 @@ impl AudioEngine
 
         if samples_per_pixel < 1.0
         {
+            // we're zoomed in far enough to see individual samples,
+            // so show the actual values instead of max/min
             let mut waveform = Vec::with_capacity(num_pixels);
 
             for i in 0..num_pixels
@@ -370,6 +375,7 @@ impl AudioEngine
                 }
             }
 
+            // early return to bypass max/min rendering
             return waveform;
         }
 
@@ -377,6 +383,7 @@ impl AudioEngine
 
         for i in 0..num_pixels
         {
+            // normal case: display max/min for the range covered by each pixel
             let pixel_start_frame = start_frame + (i as f64 * samples_per_pixel) as usize;
             let pixel_end_frame = (start_frame + ((i + 1) as f64 * samples_per_pixel) as usize).min(end_frame);
 
@@ -558,6 +565,7 @@ impl AudioEngine
         {
             "split" =>
             {
+                // split all stereo tracks to separate mono tracks with _L and _R suffixes
                 let mut results = Vec::new();
                 for track in &self.tracks
                 {
@@ -595,6 +603,7 @@ impl AudioEngine
             }
             "mono_to_stereo" =>
             {
+                // combine all pairs of mono tracks into stereo tracks
                 let mut stereo_data = vec![0.0f32; total_frames * 2];
 
                 let mono_tracks: Vec<&AudioTrack> = self.tracks.iter().filter(|t| t.channels == 1).collect();
@@ -627,6 +636,7 @@ impl AudioEngine
             }
             "mono" =>
             {
+                // downmix all tracks to mono
                 let mut mono_data = vec![0.0f32; total_frames];
 
                 for track in &self.tracks
@@ -665,6 +675,7 @@ impl AudioEngine
             }
             _ =>
             {
+                // default: mix all tracks however they would be played back
                 let (data, rate, channels) = self.mix_tracks_for_playback(start_time, end_time);
                 vec![(data, rate, channels, String::new())]
             }

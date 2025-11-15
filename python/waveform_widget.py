@@ -193,6 +193,8 @@ class WaveformWidget(QWidget):
             return
 
         track_height = waveform_height / num_tracks
+
+        # alternate colors for different tracks
         track_colors = [
             QColor(100, 200, 255),
             QColor(255, 150, 100),
@@ -302,10 +304,9 @@ class WaveformWidget(QWidget):
 
         painter.restore()
 
-        # draw playback cursor
-        if (self.playback_position > 0 and
-                self.playback_position >= self.view_start_time and
-                self.playback_position <= self.view_end_time):
+        # draw playback cursor if visible
+        if (0 < self.playback_position <= self.view_end_time and
+                self.playback_position >= self.view_start_time):
             x = self.time_to_x(self.playback_position)
             painter.setPen(QPen(QColor(255, 100, 100), 2))
             painter.drawLine(int(x), 0, int(x), height)

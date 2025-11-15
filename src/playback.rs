@@ -59,31 +59,31 @@ impl AudioPlayback
 
         let state_clone = state.clone();
 
-        // build output stream with callback
+        // build output stream with samples from audio buffer
         let stream = device
             .build_output_stream(
                 &config,
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo|
-                    {
-                        let mut state = state_clone.lock().unwrap();
+                {
+                    let mut state = state_clone.lock().unwrap();
 
-                        for sample in data.iter_mut()
+                    for sample in data.iter_mut()
+                    {
+                        if state.is_playing && state.position < state.buffer.len()
                         {
-                            if state.is_playing && state.position < state.buffer.len()
+                            *sample = state.buffer[state.position];
+                            state.position += 1;
+                        }
+                        else
+                        {
+                            *sample = 0.0;
+                            if state.position >= state.buffer.len()
                             {
-                                *sample = state.buffer[state.position];
-                                state.position += 1;
-                            }
-                            else
-                            {
-                                *sample = 0.0;
-                                if state.position >= state.buffer.len()
-                                {
-                                    state.is_playing = false;
-                                }
+                                state.is_playing = false;
                             }
                         }
-                    },
+                    }
+                },
                 |err| eprintln!("Audio stream error: {}", err),
                 None,
             )
