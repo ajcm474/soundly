@@ -16,6 +16,7 @@ pub struct AudioTrack
     pub sample_rate: u32,
     pub channels: usize,
     pub name: String,
+    pub start_offset: f64,  // time offset in seconds for when the track starts
 }
 
 /// Core audio engine for loading, processing, and exporting audio
@@ -134,6 +135,7 @@ impl AudioEngine
             sample_rate,
             channels,
             name: track_name,
+            start_offset: 0.0,
         };
 
         self.tracks.push(new_track);
@@ -200,7 +202,7 @@ impl AudioEngine
         self.tracks.first().map(|t| t.sample_rate).unwrap_or(44100)
     }
 
-    /// Get duration of the longest track
+    /// Get duration of the longest track (including offset)
     ///
     /// # Returns
     /// `f64` - duration in seconds
@@ -210,11 +212,12 @@ impl AudioEngine
         {
             if track.audio_data.is_empty()
             {
-                0.0
+                track.start_offset
             }
             else
             {
-                (track.audio_data.len() / track.channels) as f64 / track.sample_rate as f64
+                let track_duration = (track.audio_data.len() / track.channels) as f64 / track.sample_rate as f64;
+                track.start_offset + track_duration
             }
         }).fold(0.0, f64::max)
     }
@@ -240,8 +243,8 @@ impl AudioEngine
     /// Get information about all loaded tracks
     ///
     /// # Returns
-    /// `Vec<(String, u32, usize, f64)>` - vector of (name, sample_rate, channels, duration)
-    pub fn get_track_info(&self) -> Vec<(String, u32, usize, f64)>
+    /// `Vec<(String, u32, usize, f64, f64)>` - vector of (name, sample_rate, channels, duration, start_offset)
+    pub fn get_track_info(&self) -> Vec<(String, u32, usize, f64, f64)>
     {
         self.tracks.iter().map(|track|
         {
@@ -253,7 +256,7 @@ impl AudioEngine
             {
                 (track.audio_data.len() / track.channels) as f64 / track.sample_rate as f64
             };
-            (track.name.clone(), track.sample_rate, track.channels, duration)
+            (track.name.clone(), track.sample_rate, track.channels, duration, track.start_offset)
         }).collect()
     }
 
@@ -263,6 +266,24 @@ impl AudioEngine
         self.tracks.clear();
         self.playback = None;
         self.playback_sample_rate = None;
+    }
+
+    /// Set the start offset for a track
+    ///
+    /// # Parameters
+    /// * `track_index` - index of the track to modify
+    /// * `offset` - new start offset in seconds
+    ///
+    /// # Returns
+    /// `Result<(), String>` - Ok if successful, Err if track index invalid
+    pub fn set_track_offset(&mut self, track_index: usize, offset: f64) -> Result<(), String>
+    {
+        if track_index >= self.tracks.len()
+        {
+            return Err(format!("Invalid track index: {}", track_index));
+        }
+        self.tracks[track_index].start_offset = offset.max(0.0);
+        Ok(())
     }
 
     /// Get waveform data for a specific time range for all tracks
@@ -308,26 +329,56 @@ impl AudioEngine
             return vec![(0.0, 0.0, 0.0, 0.0); num_pixels];
         }
 
-        let start_frame = ((start_time * track.sample_rate as f64) as usize).min(track.audio_data.len() / track.channels);
-        let end_frame = ((end_time * track.sample_rate as f64) as usize).min(track.audio_data.len() / track.channels);
+        let track_audio_duration = (track.audio_data.len() / track.channels) as f64 / track.sample_rate as f64;
+        let track_end_time = track.start_offset + track_audio_duration;
+
+        // if the view range doesn't overlap with this track, return silence
+        if end_time <= track.start_offset || start_time >= track_end_time
+        {
+            return vec![(0.0, 0.0, 0.0, 0.0); num_pixels];
+        }
+
+        // calculate times relative to track's audio data
+        let relative_start = (start_time - track.start_offset).max(0.0);
+        let relative_end = (end_time - track.start_offset).min(track_audio_duration);
+
+        let start_frame = ((relative_start * track.sample_rate as f64) as usize).min(track.audio_data.len() / track.channels);
+        let end_frame = ((relative_end * track.sample_rate as f64) as usize).min(track.audio_data.len() / track.channels);
 
         if start_frame >= end_frame
         {
             return vec![(0.0, 0.0, 0.0, 0.0); num_pixels];
         }
 
+        // calculate how many pixels correspond to the actual audio portion
+        let view_duration = end_time - start_time;
+        let audio_start_in_view = (track.start_offset - start_time).max(0.0);
+        let audio_end_in_view = (track_end_time - start_time).min(view_duration);
+
+        let start_pixel = ((audio_start_in_view / view_duration) * num_pixels as f64) as usize;
+        let end_pixel = ((audio_end_in_view / view_duration) * num_pixels as f64).ceil() as usize;
+        let audio_pixels = end_pixel.saturating_sub(start_pixel).max(1);
+
         let frame_count = end_frame - start_frame;
-        let samples_per_pixel = (frame_count as f64) / (num_pixels as f64);
+        let samples_per_pixel = (frame_count as f64) / (audio_pixels as f64);
+
+        // build result with silence before and after as needed
+        let mut waveform = vec![(0.0, 0.0, 0.0, 0.0); num_pixels];
 
         if samples_per_pixel < 1.0
         {
             // we're zoomed in far enough to see individual samples
-            // return one entry per actual sample (not per pixel) so Python
-            // can draw discrete bars with gaps between them
-            let mut waveform = Vec::with_capacity(frame_count);
+            // return one entry per actual sample in their correct pixel positions
+            let pixels_per_sample = audio_pixels as f64 / frame_count as f64;
 
-            for frame in start_frame..end_frame
+            for (i, frame) in (start_frame..end_frame).enumerate()
             {
+                let pixel_idx = start_pixel + (i as f64 * pixels_per_sample) as usize;
+                if pixel_idx >= num_pixels
+                {
+                    break;
+                }
+
                 if track.channels == 2
                 {
                     let idx = frame * 2;
@@ -335,12 +386,7 @@ impl AudioEngine
                     {
                         let left = track.audio_data[idx];
                         let right = track.audio_data[idx + 1];
-                        // return (0, sample) so bars are drawn from center to value
-                        waveform.push((0.0, left, 0.0, right));
-                    }
-                    else
-                    {
-                        waveform.push((0.0, 0.0, 0.0, 0.0));
+                        waveform[pixel_idx] = (0.0, left, 0.0, right);
                     }
                 }
                 else if track.channels == 1
@@ -348,12 +394,7 @@ impl AudioEngine
                     if frame < track.audio_data.len()
                     {
                         let sample = track.audio_data[frame];
-                        // return (0, sample) so bars are drawn from center to value
-                        waveform.push((0.0, sample, 0.0, sample));
-                    }
-                    else
-                    {
-                        waveform.push((0.0, 0.0, 0.0, 0.0));
+                        waveform[pixel_idx] = (0.0, sample, 0.0, sample);
                     }
                 }
                 else
@@ -362,12 +403,7 @@ impl AudioEngine
                     if idx < track.audio_data.len()
                     {
                         let sample = track.audio_data[idx];
-                        // return (0, sample) so bars are drawn from center to value
-                        waveform.push((0.0, sample, 0.0, sample));
-                    }
-                    else
-                    {
-                        waveform.push((0.0, 0.0, 0.0, 0.0));
+                        waveform[pixel_idx] = (0.0, sample, 0.0, sample);
                     }
                 }
             }
@@ -376,17 +412,20 @@ impl AudioEngine
             return waveform;
         }
 
-        let mut waveform = Vec::with_capacity(num_pixels);
-
-        for i in 0..num_pixels
+        // normal case: aggregate samples per pixel
+        for i in 0..audio_pixels
         {
-            // normal case: display max/min for the range covered by each pixel
+            let pixel_idx = start_pixel + i;
+            if pixel_idx >= num_pixels
+            {
+                break;
+            }
+
             let pixel_start_frame = start_frame + (i as f64 * samples_per_pixel) as usize;
             let pixel_end_frame = (start_frame + ((i + 1) as f64 * samples_per_pixel) as usize).min(end_frame);
 
             if pixel_start_frame >= pixel_end_frame
             {
-                waveform.push((0.0, 0.0, 0.0, 0.0));
                 continue;
             }
 
@@ -412,7 +451,7 @@ impl AudioEngine
                     }
                 }
 
-                waveform.push((min_l, max_l, min_r, max_r));
+                waveform[pixel_idx] = (min_l, max_l, min_r, max_r);
             }
             else if track.channels == 1
             {
@@ -429,7 +468,7 @@ impl AudioEngine
                     }
                 }
 
-                waveform.push((min_val, max_val, min_val, max_val));
+                waveform[pixel_idx] = (min_val, max_val, min_val, max_val);
             }
             else
             {
@@ -447,7 +486,7 @@ impl AudioEngine
                     }
                 }
 
-                waveform.push((min_val, max_val, min_val, max_val));
+                waveform[pixel_idx] = (min_val, max_val, min_val, max_val);
             }
         }
 
@@ -465,7 +504,7 @@ impl AudioEngine
     ///
     /// # Notes
     /// Preserves mono if all tracks are mono, otherwise converts to stereo.
-    /// Uses the sample rate of the first track.
+    /// Uses the sample rate of the first track. Accounts for track start offsets.
     fn mix_tracks_for_playback(&self, start_time: f64, end_time: f64) -> (Vec<f32>, u32, usize)
     {
         if self.tracks.is_empty()
@@ -490,20 +529,38 @@ impl AudioEngine
 
         for track in &self.tracks
         {
-            // calculate frame range in this track's sample rate
-            let track_start_frame = (start_time * track.sample_rate as f64) as usize;
-            let track_end_frame = (end_time * track.sample_rate as f64) as usize;
-            let track_total_frames = track_end_frame.saturating_sub(track_start_frame);
+            // calculate where this track contributes to the output
+            // track audio starts at track.start_offset
+            let track_audio_duration = (track.audio_data.len() / track.channels) as f64 / track.sample_rate as f64;
+            let track_end_time = track.start_offset + track_audio_duration;
 
-            for frame_idx in 0..total_frames.min(track_total_frames)
+            // skip if track doesn't overlap with playback range
+            if end_time <= track.start_offset || start_time >= track_end_time
             {
-                let track_frame = track_start_frame + frame_idx;
+                continue;
+            }
+
+            // calculate frame ranges accounting for offset
+            for frame_idx in 0..total_frames
+            {
+                // what time does this output frame represent?
+                let output_time = start_time + (frame_idx as f64 / sample_rate as f64);
+
+                // is this time within the track's audio?
+                if output_time < track.start_offset || output_time >= track_end_time
+                {
+                    continue;
+                }
+
+                // calculate the frame within the track's audio data
+                let track_local_time = output_time - track.start_offset;
+                let track_frame = (track_local_time * track.sample_rate as f64) as usize;
                 let output_idx = frame_idx * output_channels;
 
                 // skip if track has ended
                 if track_frame >= track.audio_data.len() / track.channels
                 {
-                    break;
+                    continue;
                 }
 
                 if output_channels == 2

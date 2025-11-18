@@ -72,10 +72,30 @@ impl AudioEditor
     /// Get information about all loaded tracks
     ///
     /// # Returns
-    /// `Vec<(String, u32, usize, f64)>` - vector of (name, sample_rate, channels, duration)
-    fn get_track_info(&self) -> PyResult<Vec<(String, u32, usize, f64)>>
+    /// `Vec<(String, u32, usize, f64, f64)>` - vector of (name, sample_rate, channels, duration, start_offset)
+    fn get_track_info(&self) -> PyResult<Vec<(String, u32, usize, f64, f64)>>
     {
         Ok(self.engine.lock().unwrap().get_track_info())
+    }
+
+    /// Set the start offset for a track
+    ///
+    /// # Parameters
+    /// * `track_index` - index of the track to modify
+    /// * `offset` - new start offset in seconds
+    ///
+    /// # Returns
+    /// `PyResult<()>` - Ok if successful
+    ///
+    /// # Errors
+    /// Returns error if track index is invalid
+    fn set_track_offset(&mut self, track_index: usize, offset: f64) -> PyResult<()>
+    {
+        self.engine
+            .lock()
+            .unwrap()
+            .set_track_offset(track_index, offset)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to set track offset: {}", e)))
     }
 
     /// Get waveform data for a specific time range for all tracks
