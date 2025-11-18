@@ -117,23 +117,37 @@ class ChannelExportDialog(QDialog):
         layout.addWidget(QLabel("Output Channel Configuration:"))
         self.channel_combo = QComboBox()
 
-        if has_stereo and num_mono == 0:
-            self.channel_combo.addItems([
-                "Stereo (keep as-is)",
-                "Mono (mix down)",
-                "Split to separate mono files"
-            ])
-        elif has_stereo and num_mono > 0:
-            self.channel_combo.addItems([
-                "Stereo (mix all)",
-                "Mono (mix down all)",
-            ])
+        # stereo tracks present
+        if has_stereo:
+            if num_mono == 0:
+                # only stereo tracks
+                self.channel_combo.addItems([
+                    "Stereo (keep as-is)",
+                    "Mono (mix down)",
+                    "Split to separate mono files"
+                ])
+            else:
+                # mix of stereo and mono
+                self.channel_combo.addItems([
+                    "Stereo (mix all)",
+                    "Mono (mix down all)",
+                ])
+        # only mono tracks
         elif num_mono >= 2:
-            self.channel_combo.addItems([
-                "Mono (mix all)",
-                "Stereo (first two tracks as L/R)",
-            ])
+            if num_mono % 2 == 0:
+                # even number of mono tracks
+                self.channel_combo.addItems([
+                    "Mono (keep separate)",
+                    "Stereo (pair tracks as L/R)",
+                ])
+            else:
+                # odd number of mono tracks
+                self.channel_combo.addItems([
+                    "Mono (mix all)",
+                    "Stereo (pair tracks as L/R, mix last)",
+                ])
         else:
+            # single mono track
             self.channel_combo.addItems([
                 "Mono (keep as-is)",
             ])
@@ -162,7 +176,7 @@ class ChannelExportDialog(QDialog):
         text = self.channel_combo.currentText().lower()
         if "split" in text:
             return "split"
-        elif "stereo" in text and "first two" in text:
+        elif "pair" in text or ("stereo" in text and "l/r" in text):
             return "mono_to_stereo"
         elif "stereo" in text:
             return "stereo"

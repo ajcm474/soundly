@@ -482,18 +482,32 @@ impl AudioEngine
 
         let start_frame = (start_time * sample_rate as f64) as usize;
         let end_frame = (end_time * sample_rate as f64) as usize;
-        let total_frames = end_frame - start_frame;
+        let total_frames = end_frame.saturating_sub(start_frame);
+
+        if total_frames == 0
+        {
+            return (Vec::new(), sample_rate, output_channels);
+        }
 
         let mut mixed_data = vec![0.0f32; total_frames * output_channels];
 
         for track in &self.tracks
         {
+            // calculate frame range in this track's sample rate
             let track_start_frame = (start_time * track.sample_rate as f64) as usize;
+            let track_end_frame = (end_time * track.sample_rate as f64) as usize;
+            let track_total_frames = track_end_frame.saturating_sub(track_start_frame);
 
-            for frame_idx in 0..total_frames
+            for frame_idx in 0..total_frames.min(track_total_frames)
             {
                 let track_frame = track_start_frame + frame_idx;
                 let output_idx = frame_idx * output_channels;
+
+                // skip if track has ended
+                if track_frame >= track.audio_data.len() / track.channels
+                {
+                    break;
+                }
 
                 if output_channels == 2
                 {
@@ -559,7 +573,12 @@ impl AudioEngine
         let sample_rate = self.tracks[0].sample_rate;
         let start_frame = (start_time * sample_rate as f64) as usize;
         let end_frame = (end_time * sample_rate as f64) as usize;
-        let total_frames = end_frame - start_frame;
+        let total_frames = end_frame.saturating_sub(start_frame);
+
+        if total_frames == 0
+        {
+            return vec![(Vec::new(), sample_rate, 2, String::new())];
+        }
 
         match channel_mode
         {
@@ -572,10 +591,14 @@ impl AudioEngine
                     if track.channels == 2
                     {
                         let track_start_frame = (start_time * track.sample_rate as f64) as usize;
-                        let mut left_data = Vec::with_capacity(total_frames);
-                        let mut right_data = Vec::with_capacity(total_frames);
+                        let track_total_frames = total_frames.min(
+                            (track.audio_data.len() / 2).saturating_sub(track_start_frame)
+                        );
 
-                        for frame_idx in 0..total_frames
+                        let mut left_data = Vec::with_capacity(track_total_frames);
+                        let mut right_data = Vec::with_capacity(track_total_frames);
+
+                        for frame_idx in 0..track_total_frames
                         {
                             let track_frame = track_start_frame + frame_idx;
                             let track_idx = track_frame * 2;
@@ -586,8 +609,7 @@ impl AudioEngine
                             }
                             else
                             {
-                                left_data.push(0.0);
-                                right_data.push(0.0);
+                                break;
                             }
                         }
 
@@ -603,15 +625,21 @@ impl AudioEngine
             }
             "mono_to_stereo" =>
             {
-                // combine all pairs of mono tracks into stereo tracks
+                // combine pairs of mono tracks into stereo tracks
                 let mut stereo_data = vec![0.0f32; total_frames * 2];
 
                 let mono_tracks: Vec<&AudioTrack> = self.tracks.iter().filter(|t| t.channels == 1).collect();
 
-                if mono_tracks.len() >= 2
+                // process pairs of mono tracks
+                for pair_idx in (0..mono_tracks.len()).step_by(2)
                 {
-                    let left_track = mono_tracks[0];
-                    let right_track = mono_tracks[1];
+                    if pair_idx + 1 >= mono_tracks.len()
+                    {
+                        break;
+                    }
+
+                    let left_track = mono_tracks[pair_idx];
+                    let right_track = mono_tracks[pair_idx + 1];
 
                     let left_start = (start_time * left_track.sample_rate as f64) as usize;
                     let right_start = (start_time * right_track.sample_rate as f64) as usize;
@@ -642,8 +670,11 @@ impl AudioEngine
                 for track in &self.tracks
                 {
                     let track_start_frame = (start_time * track.sample_rate as f64) as usize;
+                    let track_total_frames = total_frames.min(
+                        (track.audio_data.len() / track.channels).saturating_sub(track_start_frame)
+                    );
 
-                    for frame_idx in 0..total_frames
+                    for frame_idx in 0..track_total_frames
                     {
                         let track_frame = track_start_frame + frame_idx;
 
