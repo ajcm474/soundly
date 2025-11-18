@@ -321,19 +321,13 @@ impl AudioEngine
 
         if samples_per_pixel < 1.0
         {
-            // we're zoomed in far enough to see individual samples,
-            // so show the actual values instead of max/min
-            let mut waveform = Vec::with_capacity(num_pixels);
+            // we're zoomed in far enough to see individual samples
+            // return one entry per actual sample (not per pixel) so Python
+            // can draw discrete bars with gaps between them
+            let mut waveform = Vec::with_capacity(frame_count);
 
-            for i in 0..num_pixels
+            for frame in start_frame..end_frame
             {
-                let frame = start_frame + (i as f64 * frame_count as f64 / num_pixels as f64) as usize;
-                if frame >= end_frame
-                {
-                    waveform.push((0.0, 0.0, 0.0, 0.0));
-                    continue;
-                }
-
                 if track.channels == 2
                 {
                     let idx = frame * 2;
@@ -341,7 +335,8 @@ impl AudioEngine
                     {
                         let left = track.audio_data[idx];
                         let right = track.audio_data[idx + 1];
-                        waveform.push((left, left, right, right));
+                        // return (0, sample) so bars are drawn from center to value
+                        waveform.push((0.0, left, 0.0, right));
                     }
                     else
                     {
@@ -353,7 +348,8 @@ impl AudioEngine
                     if frame < track.audio_data.len()
                     {
                         let sample = track.audio_data[frame];
-                        waveform.push((sample, sample, sample, sample));
+                        // return (0, sample) so bars are drawn from center to value
+                        waveform.push((0.0, sample, 0.0, sample));
                     }
                     else
                     {
@@ -366,7 +362,8 @@ impl AudioEngine
                     if idx < track.audio_data.len()
                     {
                         let sample = track.audio_data[idx];
-                        waveform.push((sample, sample, sample, sample));
+                        // return (0, sample) so bars are drawn from center to value
+                        waveform.push((0.0, sample, 0.0, sample));
                     }
                     else
                     {

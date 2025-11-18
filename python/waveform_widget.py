@@ -273,6 +273,10 @@ class WaveformWidget(QWidget):
 
                 painter.setPen(QPen(track_color, 1))
 
+                # check if we're in individual sample mode
+                # (more pixels than samples means we can see each sample distinctly)
+                pixels_per_sample = width / total_samples if total_samples > 0 else 1
+
                 for i in range(total_samples):
                     if i >= len(track_data):
                         break
@@ -281,7 +285,12 @@ class WaveformWidget(QWidget):
                     if sample_time > track_duration:
                         break
 
-                    x = (i / total_samples) * width
+                    # in individual sample mode, center each sample in its pixel span
+                    if pixels_per_sample > 1.5:
+                        x = (i + 0.5) * pixels_per_sample
+                    else:
+                        x = (i / total_samples) * width
+
                     min_l, max_l, min_r, max_r = track_data[i]
 
                     y_min_l = track_y_offset + half_channel_height - (min_l * channel_height_45percent)
@@ -300,6 +309,9 @@ class WaveformWidget(QWidget):
 
                 painter.setPen(QPen(track_color, 1))
 
+                # check if we're in individual sample mode
+                pixels_per_sample = width / total_samples if total_samples > 0 else 1
+
                 for i in range(total_samples):
                     if i >= len(track_data):
                         break
@@ -308,7 +320,12 @@ class WaveformWidget(QWidget):
                     if sample_time > track_duration:
                         break
 
-                    x = (i / total_samples) * width
+                    # in individual sample mode, center each sample in its pixel span
+                    if pixels_per_sample > 1.5:
+                        x = (i + 0.5) * pixels_per_sample
+                    else:
+                        x = (i / total_samples) * width
+
                     min_val, max_val = track_data[i][:2]
 
                     y_min = center_y - (min_val * track_height_45percent)
