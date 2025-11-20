@@ -1,10 +1,14 @@
-from PyQt6.QtWidgets import QWidget
-from PyQt6.QtCore import Qt, QRectF, QPointF
+from PyQt6.QtWidgets import QWidget, QScrollBar
+from PyQt6.QtCore import Qt, QRectF, QPointF, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QPen, QFont
+import time
 
 
 class WaveformWidget(QWidget):
     """Widget for displaying and interacting with audio waveforms from multiple tracks."""
+
+    # signal emitted when track offset changes during drag
+    track_offset_changed = pyqtSignal(int, float)
 
     def __init__(self):
         """Initialize waveform display with default view settings."""
@@ -12,6 +16,7 @@ class WaveformWidget(QWidget):
         self.waveform_data = []
         self.track_info = []
         self.duration = 0.0
+        self.max_timeline_duration = 0.0  # maximum extent including all track offsets
         self.selection_start = None
         self.selection_end = None
         self.selection_tracks = set()
@@ -28,6 +33,10 @@ class WaveformWidget(QWidget):
         self.dragging_track_index = None
         self.drag_start_x = 0
         self.drag_start_offset = 0.0
+        self.last_drag_update_time = 0.0  # for throttling drag updates
+
+        # track header state
+        self.track_header_height = 25  # height of draggable header bar
 
         self.setMinimumHeight(200)
         self.setMouseTracking(True)
@@ -85,7 +94,7 @@ class WaveformWidget(QWidget):
         channels : int, optional
             number of audio channels (1=mono, 2=stereo)
         track_info : list of tuple, optional
-            track information as (name, sample_rate, channels, duration) tuples
+            track information as (name, sample_rate, channels, duration, start_offset) tuples
 
         Notes
         -----
@@ -98,13 +107,35 @@ class WaveformWidget(QWidget):
 
         self.is_stereo = self.channels == 2
 
-        # initialize view to show full waveform if at default zoom
-        if self.zoom_level == 1.0:
-            self.view_start_time = 0.0
-            self.view_end_time = duration
+        # calculate maximum timeline duration including track offsets
+        old_max_duration = self.max_timeline_duration
+        if self.track_info:
+            self.max_timeline_duration = max(
+                (info[4] + info[3] if len(info) > 4 else info[3])
+                for info in self.track_info
+            )
         else:
-            # keep current zoom level but ensure we're within bounds
-            self.update_view_bounds()
+            self.max_timeline_duration = duration
+
+        # handle view bounds when timeline duration changes
+        if old_max_duration == 0:
+            # first load - show full timeline
+            self.view_start_time = 0.0
+            self.view_end_time = self.max_timeline_duration
+        elif old_max_duration > 0 and self.max_timeline_duration > old_max_duration:
+            # timeline extended (e.g., from dragging)
+            # keep the same visible duration, don't zoom out
+            current_visible_duration = self.view_end_time - self.view_start_time
+            # if we're viewing the end, follow it
+            if self.view_end_time >= old_max_duration - 0.01:
+                self.view_end_time = self.max_timeline_duration
+                self.view_start_time = max(0.0, self.view_end_time - current_visible_duration)
+            # otherwise keep current view (no zoom change)
+        elif old_max_duration > 0 and self.max_timeline_duration < old_max_duration:
+            # timeline shrunk - adjust view if needed
+            if self.view_end_time > self.max_timeline_duration:
+                self.view_end_time = self.max_timeline_duration
+                self.view_start_time = max(0.0, self.view_start_time)
 
         self.update()
 
@@ -144,6 +175,37 @@ class WaveformWidget(QWidget):
 
         return track_idx
 
+    def is_on_track_header(self, x, y, track_idx):
+        """
+        Check if coordinates are within the track header (draggable bar).
+
+        Parameters
+        ----------
+        x : float
+            x coordinate in pixels
+        y : float
+            y coordinate in pixels
+        track_idx : int
+            track index to check
+
+        Returns
+        -------
+        bool
+            True if within the track's header bar
+        """
+        if track_idx is None or track_idx >= len(self.track_info):
+            return False
+
+        ruler_height = 30
+        waveform_height = self.height() - ruler_height
+        num_tracks = len(self.waveform_data)
+        track_height = waveform_height / num_tracks
+
+        track_y_start = ruler_height + (track_idx * track_height)
+        track_header_end = track_y_start + self.track_header_height
+
+        return track_y_start <= y <= track_header_end
+
     def is_on_audio_block(self, x, track_idx):
         """
         Check if x coordinate is within the audio block of a track.
@@ -174,17 +236,17 @@ class WaveformWidget(QWidget):
         return track_start_time <= click_time <= track_end_time
 
     def update_view_bounds(self):
-        """Ensure view bounds are valid and within audio duration."""
-        if self.duration == 0:
+        """Ensure view bounds are valid and within maximum timeline duration."""
+        if self.max_timeline_duration == 0:
             return
 
-        visible_duration = self.duration / self.zoom_level
+        visible_duration = self.max_timeline_duration / self.zoom_level
 
         # ensure we don't go past the end
-        if self.view_start_time + visible_duration > self.duration:
-            self.view_start_time = max(0.0, self.duration - visible_duration)
+        if self.view_start_time + visible_duration > self.max_timeline_duration:
+            self.view_start_time = max(0.0, self.max_timeline_duration - visible_duration)
 
-        self.view_end_time = min(self.view_start_time + visible_duration, self.duration)
+        self.view_end_time = min(self.view_start_time + visible_duration, self.max_timeline_duration)
 
     def paintEvent(self, event):
         """
@@ -214,7 +276,7 @@ class WaveformWidget(QWidget):
         # background
         painter.fillRect(self.rect(), QColor(30, 30, 30))
 
-        if not self.waveform_data or self.duration == 0:
+        if not self.waveform_data or self.max_timeline_duration == 0:
             return
 
         self.draw_time_ruler(painter, width, ruler_height)
@@ -253,170 +315,213 @@ class WaveformWidget(QWidget):
                 painter.setPen(QPen(QColor(100, 100, 100), 2))
                 painter.drawLine(0, int(track_y_offset), width, int(track_y_offset))
 
-            if track_idx < len(self.track_info):
-                info = self.track_info[track_idx]
-                track_duration = info[3]
-                track_channels = info[2]
-                track_offset = info[4] if len(info) > 4 else 0.0
-                label = f"{info[0]} ({info[1]}Hz, {'Stereo' if info[2] == 2 else 'Mono'})"
-            else:
-                track_duration = 0.0
-                track_channels = 2
-                track_offset = 0.0
-                label = f"Track {track_idx + 1}"
+            # get track info
+            info = self.track_info[track_idx] if track_idx < len(self.track_info) else None
+            track_offset = info[4] if info and len(info) > 4 else 0.0
+            track_duration = info[3] if info else 0.0
 
-            # calculate the audio block position on screen
-            block_start_x = self.time_to_x(track_offset)
-            block_end_x = self.time_to_x(track_offset + track_duration)
+            # calculate pixel positions for this track's audio block
+            track_start_time = track_offset
+            track_end_time = track_offset + track_duration
 
-            # draw audio block background (slightly lighter than track background)
-            if block_end_x > 0 and block_start_x < width:
-                block_rect = QRectF(
-                    max(0, block_start_x),
-                    track_y_offset + 2,
-                    min(width, block_end_x) - max(0, block_start_x),
-                    track_height - 4
+            # only draw if track overlaps with visible range
+            if track_end_time > self.view_start_time and track_start_time < self.view_end_time:
+                # convert track times to pixel positions
+                start_x = self.time_to_x(track_start_time)
+                end_x = self.time_to_x(track_end_time)
+
+                # clip to visible area
+                start_x = max(0, start_x)
+                end_x = min(width, end_x)
+
+                block_width = end_x - start_x
+
+                # draw track header bar (only over audio block, like Audacity)
+                if block_width > 0:
+                    header_bg = QColor(60, 60, 60)
+                    painter.fillRect(
+                        int(start_x),
+                        int(track_y_offset),
+                        int(block_width),
+                        self.track_header_height,
+                        header_bg
+                    )
+
+                    # draw subtle top border
+                    painter.setPen(QPen(QColor(80, 80, 80), 1))
+                    painter.drawLine(int(start_x), int(track_y_offset), int(end_x), int(track_y_offset))
+
+                    # draw track name in header
+                    if info:
+                        painter.setPen(QPen(QColor(220, 220, 220), 1))
+                        font = painter.font()
+                        font.setPointSize(9)
+                        font.setBold(False)
+                        painter.setFont(font)
+                        text_rect = QRectF(start_x + 5, track_y_offset + 2, block_width - 10, self.track_header_height - 4)
+                        painter.drawText(text_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, info[0])
+
+                    # draw audio block background (slightly lighter than track header)
+                    painter.fillRect(
+                        int(start_x),
+                        int(track_y_offset + self.track_header_height),
+                        int(block_width),
+                        int(track_height - self.track_header_height),
+                        QColor(40, 40, 40)
+                    )
+
+                    # calculate which part of waveform data to draw
+                    # waveform_data corresponds to the visible time range (view_start_time to view_end_time)
+                    # we need to map from the audio block's time range to the waveform data indices
+
+                    # calculate what portion of the visible range the audio block occupies
+                    visible_start = max(track_start_time, self.view_start_time)
+                    visible_end = min(track_end_time, self.view_end_time)
+
+                    # convert to fractions of the visible time range
+                    start_fraction = (visible_start - self.view_start_time) / visible_duration
+                    end_fraction = (visible_end - self.view_start_time) / visible_duration
+
+                    # map to waveform data indices
+                    data_start_idx = int(start_fraction * len(track_data))
+                    data_end_idx = int(end_fraction * len(track_data))
+                    data_start_idx = max(0, min(data_start_idx, len(track_data) - 1))
+                    data_end_idx = max(data_start_idx + 1, min(data_end_idx, len(track_data)))
+
+                    # draw waveform
+                    painter.setPen(QPen(track_color, 1))
+
+                    if self.is_stereo:
+                        # stereo: draw left and right channels
+                        left_center = track_y_offset + self.track_header_height + (track_height - self.track_header_height) * 0.25
+                        right_center = track_y_offset + self.track_header_height + (track_height - self.track_header_height) * 0.75
+                        channel_height = (track_height - self.track_header_height) * 0.25
+
+                        for i in range(data_start_idx, data_end_idx):
+                            if i >= len(track_data):
+                                break
+
+                            min_l, max_l, min_r, max_r = track_data[i]
+
+                            # calculate x position for this data point
+                            # waveform_data[i] represents a specific time in the view range
+                            # map index to time in full view range
+                            time_fraction = i / max(1, len(track_data) - 1)
+                            time_at_point = self.view_start_time + time_fraction * (self.view_end_time - self.view_start_time)
+                            x = self.time_to_x(time_at_point)
+
+                            # when zoomed in enough that samples are visible individually
+                            if abs(max_l - min_l) < 0.001:
+                                # draw single sample as line from center to value
+                                y_top = left_center - (max_l * channel_height)
+                                painter.drawLine(
+                                    QPointF(x, left_center),
+                                    QPointF(x, y_top)
+                                )
+                            else:
+                                # draw waveform envelope
+                                y_max = left_center - (max_l * channel_height)
+                                y_min = left_center - (min_l * channel_height)
+                                painter.drawLine(QPointF(x, y_min), QPointF(x, y_max))
+
+                            # right channel
+                            if abs(max_r - min_r) < 0.001:
+                                y_top = right_center - (max_r * channel_height)
+                                painter.drawLine(
+                                    QPointF(x, right_center),
+                                    QPointF(x, y_top)
+                                )
+                            else:
+                                y_max = right_center - (max_r * channel_height)
+                                y_min = right_center - (min_r * channel_height)
+                                painter.drawLine(QPointF(x, y_min), QPointF(x, y_max))
+                    else:
+                        # mono: draw single waveform
+                        center_y = track_y_offset + self.track_header_height + (track_height - self.track_header_height) / 2
+                        channel_height = (track_height - self.track_header_height) / 2
+
+                        for i in range(data_start_idx, data_end_idx):
+                            if i >= len(track_data):
+                                break
+
+                            min_l, max_l, _, _ = track_data[i]
+
+                            # calculate x position for this data point
+                            # waveform_data[i] represents a specific time in the view range
+                            # map index to time in full view range
+                            time_fraction = i / max(1, len(track_data) - 1)
+                            time_at_point = self.view_start_time + time_fraction * (self.view_end_time - self.view_start_time)
+                            x = self.time_to_x(time_at_point)
+
+                            if abs(max_l - min_l) < 0.001:
+                                y_top = center_y - (max_l * channel_height)
+                                painter.drawLine(
+                                    QPointF(x, center_y),
+                                    QPointF(x, y_top)
+                                )
+                            else:
+                                y_max = center_y - (max_l * channel_height)
+                                y_min = center_y - (min_l * channel_height)
+                                painter.drawLine(QPointF(x, y_min), QPointF(x, y_max))
+
+            # draw selection highlight for this track
+            if track_idx in self.selection_tracks and self.selection_start is not None and self.selection_end is not None:
+                sel_start = min(self.selection_start, self.selection_end)
+                sel_end = max(self.selection_start, self.selection_end)
+
+                sel_start_x = self.time_to_x(sel_start)
+                sel_end_x = self.time_to_x(sel_end)
+
+                painter.fillRect(
+                    int(sel_start_x),
+                    int(track_y_offset),
+                    int(sel_end_x - sel_start_x),
+                    int(track_height),
+                    QColor(255, 255, 255, 50)
                 )
-                painter.fillRect(block_rect, QColor(45, 45, 45))
 
-                # draw block border
-                painter.setPen(QPen(QColor(80, 80, 80), 1))
-                painter.drawRect(block_rect)
-
-            # draw selection highlight ON TOP of block background
-            if self.selection_start is not None and self.selection_end is not None:
-                if track_idx in self.selection_tracks:
-                    sel_start = min(self.selection_start, self.selection_end)
-                    sel_end = max(self.selection_start, self.selection_end)
-
-                    if sel_end >= self.view_start_time and sel_start <= self.view_end_time:
-                        start_x = self.time_to_x(sel_start)
-                        end_x = self.time_to_x(sel_end)
-                        painter.fillRect(QRectF(start_x, track_y_offset, end_x - start_x, track_height),
-                                         QColor(100, 150, 255, 80))
-
-            # overlay track label in the block area
-            painter.setPen(QPen(QColor(200, 200, 200), 1))
-            font = painter.font()
-            font.setPointSize(9)
-            font.setBold(True)
-            painter.setFont(font)
-            label_x = max(5, block_start_x + 5)
-            painter.drawText(int(label_x), int(track_y_offset + 15), label)
-
-            total_samples = len(track_data)
-            if total_samples == 0:
-                continue
-
-            is_stereo = track_channels == 2
-
-            if is_stereo:
-                channel_height = track_height / 2
-                half_channel_height = channel_height / 2
-                channel_height_plus_half = channel_height + half_channel_height
-                channel_height_45percent = channel_height * 0.45
-
-                painter.setPen(QPen(QColor(60, 60, 60), 1))
-                painter.drawLine(0, int(track_y_offset + half_channel_height),
-                                 width, int(track_y_offset + half_channel_height))
-                painter.drawLine(0, int(track_y_offset + channel_height_plus_half),
-                                 width, int(track_y_offset + channel_height_plus_half))
-
-                painter.setPen(QPen(QColor(120, 120, 120), 1))
-                painter.drawText(5, int(track_y_offset + half_channel_height + 5), "L")
-                painter.drawText(5, int(track_y_offset + channel_height_plus_half + 5), "R")
-
-                painter.setPen(QPen(track_color, 1))
-
-                # Rust returns data at correct pixel positions (index = pixel x)
-                # Just draw at each pixel position where there's non-zero data
-                for i in range(total_samples):
-                    if i >= len(track_data):
-                        break
-
-                    min_l, max_l, min_r, max_r = track_data[i]
-
-                    # skip silent/zero samples
-                    if min_l == 0.0 and max_l == 0.0 and min_r == 0.0 and max_r == 0.0:
-                        continue
-
-                    # x position is directly the index (pixel position)
-                    x = i
-
-                    y_min_l = track_y_offset + half_channel_height - (min_l * channel_height_45percent)
-                    y_max_l = track_y_offset + half_channel_height - (max_l * channel_height_45percent)
-                    painter.drawLine(QPointF(x, y_min_l), QPointF(x, y_max_l))
-
-                    y_min_r = track_y_offset + channel_height_plus_half - (min_r * channel_height_45percent)
-                    y_max_r = track_y_offset + channel_height_plus_half - (max_r * channel_height_45percent)
-                    painter.drawLine(QPointF(x, y_min_r), QPointF(x, y_max_r))
-            else:
-                center_y = track_y_offset + track_height / 2
-                track_height_45percent = track_height * 0.45
-
-                painter.setPen(QPen(QColor(60, 60, 60), 1))
-                painter.drawLine(0, int(center_y), width, int(center_y))
-
-                painter.setPen(QPen(track_color, 1))
-
-                # Rust returns data at correct pixel positions (index = pixel x)
-                # Just draw at each pixel position where there's non-zero data
-                for i in range(total_samples):
-                    if i >= len(track_data):
-                        break
-
-                    min_val, max_val = track_data[i][:2]
-
-                    # skip silent/zero samples
-                    if min_val == 0.0 and max_val == 0.0:
-                        continue
-
-                    # x position is directly the index (pixel position)
-                    x = i
-
-                    y_min = center_y - (min_val * track_height_45percent)
-                    y_max = center_y - (max_val * track_height_45percent)
-
-                    painter.drawLine(QPointF(x, y_min), QPointF(x, y_max))
+        # draw playback position indicator
+        if self.playback_position > 0:
+            playback_x = self.time_to_x(self.playback_position)
+            if 0 <= playback_x <= width:
+                painter.setPen(QPen(QColor(255, 0, 0), 2))
+                painter.drawLine(int(playback_x), 0, int(playback_x), int(waveform_height))
 
         painter.restore()
 
-        # draw playback cursor if visible
-        if (0 < self.playback_position <= self.view_end_time and
-                self.playback_position >= self.view_start_time):
-            x = self.time_to_x(self.playback_position)
-            painter.setPen(QPen(QColor(255, 100, 100), 2))
-            painter.drawLine(int(x), 0, int(x), height)
-
     def draw_time_ruler(self, painter, width, ruler_height):
         """
-        Draw time ruler with adaptive intervals.
+        Draw time ruler at top of waveform display.
 
         Parameters
         ----------
         painter : QPainter
             painter object for drawing
         width : int
-            widget width in pixels
+            width of widget in pixels
         ruler_height : int
-            height of ruler area in pixels
+            height of ruler in pixels
 
         Notes
         -----
-        Automatically adjusts time intervals based on zoom level to
-        maintain readable spacing between marks.
+        Automatically adjusts time mark spacing based on zoom level.
         """
-        painter.fillRect(0, 0, width, ruler_height, QColor(40, 40, 40))
+        painter.fillRect(0, 0, width, ruler_height, QColor(50, 50, 50))
 
-        # border line
-        painter.setPen(QPen(QColor(80, 80, 80), 1))
-        painter.drawLine(0, ruler_height - 1, width, ruler_height - 1)
+        if self.max_timeline_duration == 0:
+            return
 
         visible_duration = self.view_end_time - self.view_start_time
+        if visible_duration <= 0:
+            return
 
+        # determine appropriate time interval for marks
         intervals = [
             0.001,
+            0.005,
             0.01,
+            0.025,
+            0.05,
             0.1,
             1.0,
             5.0,
@@ -474,8 +579,7 @@ class WaveformWidget(QWidget):
 
         Notes
         -----
-        Ignores clicks in the ruler area at top of widget. Alt+click on an
-        audio block starts dragging; regular click starts selection.
+        Clicking on track header starts dragging; regular click starts selection.
         """
         if event.button() == Qt.MouseButton.LeftButton:
             if event.position().y() < 30:
@@ -485,8 +589,8 @@ class WaveformWidget(QWidget):
             if track_idx is None:
                 return
 
-            # Alt+click to drag track, regular click for selection
-            if event.modifiers() & Qt.KeyboardModifier.AltModifier:
+            # check if clicking on track header (draggable area)
+            if self.is_on_track_header(event.position().x(), event.position().y(), track_idx):
                 if self.is_on_audio_block(event.position().x(), track_idx):
                     # start dragging this track
                     self.is_dragging_track = True
@@ -496,14 +600,15 @@ class WaveformWidget(QWidget):
                         self.drag_start_offset = self.track_info[track_idx][4]
                     else:
                         self.drag_start_offset = 0.0
+                    self.last_drag_update_time = time.time()
                     self.setCursor(Qt.CursorShape.ClosedHandCursor)
                     return
 
             # start selection
             self.is_selecting = True
-            time = self.x_to_time(event.position().x())
-            self.selection_start = time
-            self.selection_end = time
+            time_val = self.x_to_time(event.position().x())
+            self.selection_start = time_val
+            self.selection_end = time_val
             self.selection_tracks = {track_idx}
             self.update()
 
@@ -518,10 +623,17 @@ class WaveformWidget(QWidget):
 
         Notes
         -----
-        If dragging a track, updates its offset. Otherwise expands selection.
-        Also updates cursor based on what's under the mouse.
+        Track dragging is throttled to ~30fps for performance.
+        Updates cursor based on what's under the mouse.
         """
         if self.is_dragging_track and self.dragging_track_index is not None:
+            # throttle updates to approximately 30fps for performance
+            current_time = time.time()
+            if current_time - self.last_drag_update_time < 0.033:  # ~30fps
+                return
+
+            self.last_drag_update_time = current_time
+
             # calculate new offset based on drag distance
             delta_x = event.position().x() - self.drag_start_x
             visible_duration = self.view_end_time - self.view_start_time
@@ -529,18 +641,12 @@ class WaveformWidget(QWidget):
 
             new_offset = max(0.0, self.drag_start_offset + delta_time)
 
-            # update the track offset via the engine
-            parent = self.parent()
-            if parent and hasattr(parent.parent(), 'engine'):
-                try:
-                    parent.parent().engine.set_track_offset(self.dragging_track_index, new_offset)
-                    self._update_parent_waveform()
-                except Exception as e:
-                    print(f"Error setting track offset: {e}")
+            # emit signal for parent to handle (which will update Rust and redraw)
+            self.track_offset_changed.emit(self.dragging_track_index, new_offset)
 
         elif self.is_selecting:
-            time = self.x_to_time(event.position().x())
-            self.selection_end = time
+            time_val = self.x_to_time(event.position().x())
+            self.selection_end = time_val
 
             track_idx = self.get_track_at_y(event.position().y())
             if track_idx is not None:
@@ -548,11 +654,14 @@ class WaveformWidget(QWidget):
 
             self.update()
         else:
-            # update cursor based on what's under the mouse (show hand when Alt is held)
-            if event.modifiers() & Qt.KeyboardModifier.AltModifier:
-                track_idx = self.get_track_at_y(event.position().y())
-                if track_idx is not None and self.is_on_audio_block(event.position().x(), track_idx):
-                    self.setCursor(Qt.CursorShape.OpenHandCursor)
+            # update cursor based on what's under the mouse
+            track_idx = self.get_track_at_y(event.position().y())
+            if track_idx is not None:
+                if self.is_on_track_header(event.position().x(), event.position().y(), track_idx):
+                    if self.is_on_audio_block(event.position().x(), track_idx):
+                        self.setCursor(Qt.CursorShape.OpenHandCursor)
+                    else:
+                        self.setCursor(Qt.CursorShape.ArrowCursor)
                 else:
                     self.setCursor(Qt.CursorShape.ArrowCursor)
             else:
@@ -609,18 +718,18 @@ class WaveformWidget(QWidget):
         -----
         Requests waveform redraw from parent after updating bounds.
         """
-        if self.duration <= 0:
+        if self.max_timeline_duration <= 0:
             return
 
-        visible_duration = self.duration / new_zoom
+        visible_duration = self.max_timeline_duration / new_zoom
 
         self.view_start_time = max(0.0, center_time - visible_duration / 2)
-        self.view_end_time = min(self.duration, self.view_start_time + visible_duration)
+        self.view_end_time = min(self.max_timeline_duration, self.view_start_time + visible_duration)
 
         # adjust if we hit the end
-        if self.view_end_time >= self.duration:
-            self.view_end_time = self.duration
-            self.view_start_time = max(0.0, self.duration - visible_duration)
+        if self.view_end_time >= self.max_timeline_duration:
+            self.view_end_time = self.max_timeline_duration
+            self.view_start_time = max(0.0, self.max_timeline_duration - visible_duration)
 
         self._update_parent_waveform()
 
@@ -635,10 +744,10 @@ class WaveformWidget(QWidget):
         """
         mouse_time = self.x_to_time(event.position().x())
         mouse_frac = event.position().x() / self.width()
-        visible_duration = self.duration / self.zoom_level
+        visible_duration = self.max_timeline_duration / self.zoom_level
 
         self.view_start_time = max(0, mouse_time - (mouse_frac * visible_duration))
-        self.view_end_time = min(self.duration, self.view_start_time + visible_duration)
+        self.view_end_time = min(self.max_timeline_duration, self.view_start_time + visible_duration)
 
     def wheelEvent(self, event):
         """
@@ -664,7 +773,7 @@ class WaveformWidget(QWidget):
             # zoom in
             self.zoom_level = min(max_zoom, self.zoom_level * 1.2)
 
-            if self.zoom_level != old_zoom and self.duration > 0:
+            if self.zoom_level != old_zoom and self.max_timeline_duration > 0:
                 self._center_on_mouse_position(event)
                 self._update_parent_waveform()
 
@@ -672,10 +781,10 @@ class WaveformWidget(QWidget):
             # zoom out
             self.zoom_level = max(1.0, self.zoom_level / 1.2)
 
-            if self.zoom_level != old_zoom and self.duration > 0:
+            if self.zoom_level != old_zoom and self.max_timeline_duration > 0:
                 if self.zoom_level == 1.0:
                     self.view_start_time = 0.0
-                    self.view_end_time = self.duration
+                    self.view_end_time = self.max_timeline_duration
                 else:
                     self._center_on_mouse_position(event)
 
@@ -768,13 +877,13 @@ class WaveformWidget(QWidget):
         self.playback_position = position
 
         if self.auto_scroll and self.zoom_level > 1.0:
-            visible_duration = self.duration / self.zoom_level
+            visible_duration = self.max_timeline_duration / self.zoom_level
             needs_parent_update = False
 
             # scroll right when approaching right edge
             if position > self.view_start_time + visible_duration * 0.9:
                 new_start = position - visible_duration * 0.1
-                self.view_start_time = max(0.0, min(new_start, self.duration - visible_duration))
+                self.view_start_time = max(0.0, min(new_start, self.max_timeline_duration - visible_duration))
                 needs_parent_update = True
 
             # scroll left when playback should start before current view
@@ -806,7 +915,7 @@ class WaveformWidget(QWidget):
         max_zoom = self._get_max_zoom()
         self.zoom_level = min(max_zoom, self.zoom_level * 1.5)
 
-        if self.zoom_level != old_zoom and self.duration > 0:
+        if self.zoom_level != old_zoom and self.max_timeline_duration > 0:
             selection = self.get_selection()
             if selection:
                 sel_start, sel_end = selection[0]
@@ -827,11 +936,11 @@ class WaveformWidget(QWidget):
         old_zoom = self.zoom_level
         self.zoom_level = max(1.0, self.zoom_level / 1.5)
 
-        if self.zoom_level != old_zoom and self.duration > 0:
+        if self.zoom_level != old_zoom and self.max_timeline_duration > 0:
             if self.zoom_level == 1.0:
                 # show entire waveform
                 self.view_start_time = 0.0
-                self.view_end_time = self.duration
+                self.view_end_time = self.max_timeline_duration
                 self._update_parent_waveform()
             else:
                 # try to keep the current center

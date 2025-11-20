@@ -277,6 +277,9 @@ class AudioEditorWindow(QMainWindow):
 
         self.waveform = WaveformWidget()
 
+        # connect the track offset changed signal for efficient dragging
+        self.waveform.track_offset_changed.connect(self.on_track_offset_changed)
+
         main_layout.addLayout(button_layout)
         main_layout.addWidget(self.waveform)
 
@@ -385,6 +388,28 @@ class AudioEditorWindow(QMainWindow):
             self.waveform.set_waveform(waveform_data, duration, channels, track_info)
         except Exception as e:
             print(f"Error updating waveform: {e}")
+
+    def on_track_offset_changed(self, track_index, new_offset):
+        """
+        Handle track offset changes during dragging.
+
+        Parameters
+        ----------
+        track_index : int
+            index of the track being dragged
+        new_offset : float
+            new offset time in seconds
+
+        Notes
+        -----
+        This is called during drag operations (throttled to ~30fps) and
+        updates the Rust engine and triggers a waveform redraw.
+        """
+        try:
+            self.engine.set_track_offset(track_index, new_offset)
+            self.update_waveform()
+        except Exception as e:
+            print(f"Error setting track offset: {e}")
 
     def play(self):
         """
