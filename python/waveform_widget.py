@@ -38,8 +38,78 @@ class WaveformWidget(QWidget):
         # track header state
         self.track_header_height = 25  # height of draggable header bar
 
+        # create horizontal scrollbar
+        self.scrollbar = QScrollBar(Qt.Orientation.Horizontal, self)
+        self.scrollbar.setMinimum(0)
+        self.scrollbar.setMaximum(1000)
+        self.scrollbar.setValue(0)
+        self.scrollbar.valueChanged.connect(self._on_scrollbar_changed)
+        self.scrollbar_height = 16
+        self._updating_scrollbar = False  # prevent feedback loop
+
         self.setMinimumHeight(200)
         self.setMouseTracking(True)
+
+    def _on_scrollbar_changed(self, value):
+        """Handle scrollbar value changes to update view position."""
+        if self._updating_scrollbar:
+            return
+
+        if self.max_timeline_duration == 0:
+            return
+
+        # map scrollbar value (0-1000) to time position
+        scroll_fraction = value / 1000.0
+        visible_duration = self.view_end_time - self.view_start_time
+
+        # calculate maximum scroll position
+        max_scroll_time = max(0, self.max_timeline_duration - visible_duration)
+
+        # set new view start time
+        self.view_start_time = scroll_fraction * max_scroll_time
+        self.view_end_time = self.view_start_time + visible_duration
+
+        # clamp to valid range
+        if self.view_end_time > self.max_timeline_duration:
+            self.view_end_time = self.max_timeline_duration
+            self.view_start_time = max(0, self.view_end_time - visible_duration)
+
+        self._update_parent_waveform()
+
+    def _update_scrollbar(self):
+        """Update scrollbar position and page size based on current view."""
+        if self.max_timeline_duration == 0 or self._updating_scrollbar:
+            return
+
+        self._updating_scrollbar = True
+
+        visible_duration = self.view_end_time - self.view_start_time
+
+        # if we can see everything, hide scrollbar
+        if visible_duration >= self.max_timeline_duration:
+            self.scrollbar.hide()
+        else:
+            self.scrollbar.show()
+
+            # calculate scrollbar position
+            max_scroll_time = max(0, self.max_timeline_duration - visible_duration)
+            if max_scroll_time > 0:
+                scroll_fraction = self.view_start_time / max_scroll_time
+                value = int(scroll_fraction * 1000)
+                self.scrollbar.setValue(value)
+
+            # set page step (how much to scroll on page up/down)
+            page_fraction = visible_duration / self.max_timeline_duration
+            self.scrollbar.setPageStep(int(page_fraction * 1000))
+
+        self._updating_scrollbar = False
+
+    def resizeEvent(self, event):
+        """Handle widget resize to reposition scrollbar."""
+        super().resizeEvent(event)
+        # position scrollbar at bottom
+        self.scrollbar.setGeometry(0, self.height() - self.scrollbar_height,
+                                   self.width(), self.scrollbar_height)
 
     def format_time(self, time_seconds):
         """
@@ -137,6 +207,7 @@ class WaveformWidget(QWidget):
                 self.view_end_time = self.max_timeline_duration
                 self.view_start_time = max(0.0, self.view_start_time)
 
+        self._update_scrollbar()
         self.update()
 
     def _update_parent_waveform(self):
@@ -269,9 +340,11 @@ class WaveformWidget(QWidget):
         width = self.width()
         height = self.height()
 
-        # reserve space for time ruler
+        # reserve space for time ruler and scrollbar
         ruler_height = 30
-        waveform_height = height - ruler_height
+        # only reserve space for scrollbar if it's visible
+        scrollbar_space = self.scrollbar_height if self.scrollbar.isVisible() else 0
+        waveform_height = height - ruler_height - scrollbar_space
 
         # background
         painter.fillRect(self.rect(), QColor(30, 30, 30))
@@ -731,6 +804,7 @@ class WaveformWidget(QWidget):
             self.view_end_time = self.max_timeline_duration
             self.view_start_time = max(0.0, self.max_timeline_duration - visible_duration)
 
+        self._update_scrollbar()
         self._update_parent_waveform()
 
     def _center_on_mouse_position(self, event):
@@ -775,6 +849,7 @@ class WaveformWidget(QWidget):
 
             if self.zoom_level != old_zoom and self.max_timeline_duration > 0:
                 self._center_on_mouse_position(event)
+                self._update_scrollbar()
                 self._update_parent_waveform()
 
         elif delta < 0:
@@ -788,6 +863,7 @@ class WaveformWidget(QWidget):
                 else:
                     self._center_on_mouse_position(event)
 
+                self._update_scrollbar()
                 self._update_parent_waveform()
 
         event.accept()
@@ -893,6 +969,7 @@ class WaveformWidget(QWidget):
 
             if needs_parent_update:
                 self.view_end_time = self.view_start_time + visible_duration
+                self._update_scrollbar()
                 self._update_parent_waveform()
 
         self.update()
@@ -941,6 +1018,7 @@ class WaveformWidget(QWidget):
                 # show entire waveform
                 self.view_start_time = 0.0
                 self.view_end_time = self.max_timeline_duration
+                self._update_scrollbar()
                 self._update_parent_waveform()
             else:
                 # try to keep the current center
